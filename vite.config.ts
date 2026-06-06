@@ -8,21 +8,37 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/firebase')) return 'firebase'
-          if (id.includes('node_modules/recharts')) return 'recharts'
-          if (id.includes('node_modules/zustand')) return 'zustand'
-          if (id.includes('node_modules/react-hook-form') || id.includes('node_modules/@hookform') || id.includes('node_modules/zod')) return 'form'
-          if (id.includes('node_modules/date-fns')) return 'date-fns'
-          if (id.includes('node_modules/@tanstack')) return 'tanstack'
-          if (id.includes('node_modules/lucide-react')) return 'icons'
-          if (id.includes('node_modules/workbox')) return 'workbox'
-          if (id.includes('node_modules/scheduler')) return 'scheduler'
-          if (id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom') || id.includes('/node_modules/react/')) return 'react-core'
+          // ✅ React PHẢI được check ĐẦU TIÊN — trước khi vendor catch-all
+          // Lỗi cũ: react/ bị vendor bắt trước vì vendor là catch-all cuối
+          // nhưng react-dom lại không match pattern '/node_modules/react/'
+          if (
+            id.includes('/node_modules/react/') ||
+            id.includes('/node_modules/react-dom/') ||
+            id.includes('/node_modules/react-router') ||
+            id.includes('/node_modules/react-router-dom/')
+          ) return 'react-core'
+
+          // Các lib lớn — check trước vendor
+          if (id.includes('/node_modules/firebase/')) return 'firebase'
+          if (id.includes('/node_modules/recharts/')) return 'recharts'
+          if (id.includes('/node_modules/@tanstack/')) return 'tanstack'
+          if (
+            id.includes('/node_modules/react-hook-form/') ||
+            id.includes('/node_modules/@hookform/') ||
+            id.includes('/node_modules/zod/')
+          ) return 'form'
+          if (id.includes('/node_modules/date-fns/')) return 'date-fns'
+          if (id.includes('/node_modules/lucide-react/')) return 'icons'
+          if (id.includes('/node_modules/zustand/')) return 'zustand'
+          if (id.includes('/node_modules/scheduler/')) return 'scheduler'
+          if (id.includes('/node_modules/workbox')) return 'workbox'
+
+          // ✅ vendor là catch-all CUỐI CÙNG
           if (id.includes('node_modules')) return 'vendor'
         },
       },
     },
-    chunkSizeWarningLimit: 300,
+    chunkSizeWarningLimit: 500,
   },
   plugins: [
     react(),
