@@ -4,18 +4,34 @@ import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
 export default defineConfig({
+  base: './',
   build: {
+    sourcemap: false,
+    minify: 'terser',
+    cssCodeSplit: true,
     rollupOptions: {
       output: {
         // ✅ Object syntax — Rollup tự resolve dependency order, không bị circular chunk
         // Khác với function syntax: không cần quan tâm thứ tự, Rollup xử lý tự động
         manualChunks: {
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'firebase':     ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+          'firebase':     ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/storage', 'firebase/messaging'],
           'charts':       ['recharts'],
           'forms':        ['react-hook-form', '@hookform/resolvers', 'zod'],
           'utils':        ['date-fns', 'zustand', '@tanstack/react-query', 'lucide-react'],
         },
+        assetFileNames: 'assets/[name]-[hash][extname]',
+        chunkFileNames: '[name]-[hash].js',
+        entryFileNames: '[name]-[hash].js',
+      },
+    },
+    terserOptions: {
+      compress: {
+        drop_console: true,
+        drop_debugger: true,
+      },
+      format: {
+        comments: false,
       },
     },
     chunkSizeWarningLimit: 800,
