@@ -21,6 +21,10 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'technician';
     }
 
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
     function isPrivileged() {
       return isAdmin() || isManager() || isTechnician();
     }
@@ -29,10 +33,21 @@ service cloud.firestore {
       return isAuthenticated();
     }
 
-    // Users — authenticated can read own doc, admin can write
+    // Users — authenticated can read, admin can write, user can update own doc (FCM tokens)
     match /users/{userId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update: if isAdmin()
+        || (request.auth.uid == userId
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['lastLogin', 'fcmTokens', 'updatedAt']));
+    }
+
+    // Audit log — admin only
+    match /auditLog/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
     }
 
     // Work Orders — all roles can write
@@ -90,13 +105,32 @@ service cloud.firestore {
     }
 
     match /inventory/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isManager();
+    }
+
+    match /inventory/{docId}/transactions/{txId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || isManager() || isTechnician();
+      allow update, delete: if isAdmin() || isManager();
     }
 
     match /inventoryTransactions/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || isManager() || isTechnician();
+      allow update: if isAuthenticated()
+        && (getUserRole() in ['admin', 'manager']
+            || (getUserRole() == 'technician'
+                && request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['legalDocs', 'legalDocsComplete', 'legalDocsStatus'])));
+      allow delete: if getUserRole() in ['admin'];
+    }
+
+    match /importDocAudit/{auditId} {
+      allow read: if isAuthenticated()
+        && getUserRole() in ['admin', 'manager'];
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
     }
 
     match /assets/{docId} {
@@ -200,6 +234,91 @@ service cloud.firestore {
     match /vendors/{vendorId}/contracts/{contractId} {
       allow read: if canReadAll();
       allow write: if isAdmin();
+    }
+
+    // Notifications — user can only read/write their own
+    match /notifications/{userId}/items/{notifId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Expiry Alerts
+    match /expiryAlerts/{alertId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated()
+        && getUserRole() in ['admin', 'manager', 'technician'];
+      allow delete: if getUserRole() in ['admin', 'manager'];
+    }
+
+    // Alert Rules — authenticated can read, admin can write
+    match /alertRules/{ruleId} {
+      allow read: if isAuthenticated();
+      allow write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // PM Schedules
+    match /pmSchedules/{schedId} {
+      allow read: if isAuthenticated();
+      allow create, update: if getUserRole() in ['admin', 'manager'];
+      allow delete: if getUserRole() == 'admin';
+    }
+
+    // PM Work Orders
+    match /pmWorkOrders/{woId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated()
+        && (request.auth.uid == resource.data.assignedTo
+            || getUserRole() in ['admin', 'manager']);
+      allow delete: if getUserRole() in ['admin'];
+    }
+
+    // PM Execution Log
+    match /pmExecutionLog/{logId} {
+      allow read: if getUserRole() in ['admin', 'manager'];
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    // Operation logs — M&E daily shift logs
+    match /operationLogs/{logId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated()
+        && (request.auth.uid == resource.data.loggedBy
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'manager']);
+      allow delete: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Disposal Requests (P2.2)
+    match /disposalRequests/{reqId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated()
+        && getUserRole() in ['admin', 'manager', 'technician'];
+      allow update: if isAuthenticated()
+        && (request.auth.uid == resource.data.requestedBy
+            || getUserRole() in ['admin', 'manager']);
+      allow delete: if getUserRole() == 'admin'
+        && resource.data.status == 'draft';
+    }
+
+    // Disposal Councils (P2.2)
+    match /disposalCouncils/{councilId} {
+      allow read: if isAuthenticated();
+      allow create, update: if getUserRole() in ['admin', 'manager'];
+      allow delete: if getUserRole() == 'admin';
+
+      match /votes/{voteId} {
+        allow read: if isAuthenticated();
+        allow create, update: if isAuthenticated()
+          && getUserRole() in ['admin', 'manager'];
+      }
+    }
+
+    // Disposal Executions (P2.2)
+    match /disposalExecutions/{execId} {
+      allow read: if isAuthenticated();
+      allow create, update: if getUserRole() in ['admin', 'manager'];
+      allow delete: if false;
     }
   }
 }

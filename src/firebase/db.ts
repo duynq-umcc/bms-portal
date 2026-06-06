@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   addDoc,
+  setDoc,
   updateDoc,
   deleteDoc as fsDeleteDoc,
   getDoc,
@@ -12,6 +13,7 @@ import {
   onSnapshot,
   serverTimestamp,
   limit,
+  writeBatch,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from './config'
@@ -45,6 +47,9 @@ import type {
   WasteLogEntry,
   BuildingInspection,
   VendorRating,
+  NotificationItem,
+  ExpiryAlert,
+  ImportDocAudit,
 } from './types'
 
 // Users
@@ -254,18 +259,27 @@ export const inventoryTransactionsRef = () => collection(db, 'inventoryTransacti
 
 export const listenTransactionLog = (
   cb: (docs: (InventoryTransaction & { id: string })[]) => void,
-  type?: 'import' | 'export'
+  type?: 'import' | 'export',
+  onError?: (error: Error) => void
 ): Unsubscribe => {
   const q = type
     ? query(inventoryTransactionsRef(), where('type', '==', type), orderBy('date', 'desc'))
     : query(inventoryTransactionsRef(), orderBy('date', 'desc'))
-  return onSnapshot(q, (snap) =>
-    cb(
-      snap.docs.map((d) => ({
-        ...(d.data() as object),
-        id: d.id,
-      } as InventoryTransaction & { id: string }))
-    )
+  return onSnapshot(
+    q,
+    (snap) => {
+      console.log('[Warehouse] ✅ inventory transactions:', snap.size)
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as InventoryTransaction & { id: string }))
+      )
+    },
+    (error) => {
+      console.error('[Warehouse] ❌ inventoryTransactions onSnapshot error:', error.code, error.message)
+      onError?.(error)
+    }
   )
 }
 
@@ -295,9 +309,20 @@ export const updateInventoryQuantity = async (itemId: string, delta: number) => 
 
 // ─── Inventory (inventory collection) ───────────────────────────────────────
 export const inventoryRef = () => collection(db, 'inventory')
-export const listenInventory = (cb: (docs: (InventoryItem & { id: string })[]) => void): Unsubscribe => {
-  return onSnapshot(inventoryRef(), (snap) =>
-    cb(snap.docs.map((d) => ({ ...(d.data() as object), id: d.id } as InventoryItem & { id: string })))
+export const listenInventory = (
+  cb: (docs: (InventoryItem & { id: string })[]) => void,
+  onError?: (error: Error) => void
+): Unsubscribe => {
+  return onSnapshot(
+    inventoryRef(),
+    (snap) => {
+      console.log('[Warehouse] ✅ inventory docs:', snap.size)
+      cb(snap.docs.map((d) => ({ ...(d.data() as object), id: d.id } as InventoryItem & { id: string })))
+    },
+    (error) => {
+      console.error('[Warehouse] ❌ inventory onSnapshot error:', error.code, error.message)
+      onError?.(error)
+    }
   )
 }
 export const addInventoryItem = (data: Omit<InventoryItem, 'id'>) => addDoc(inventoryRef(), data)
@@ -468,3 +493,290 @@ export const listenInfraByType = (
 
 // Delete helpers
 export const deleteDoc = (path: string) => fsDeleteDoc(doc(db, path))
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Expiry Alerts
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const expiryAlertsRef = () => collection(db, 'expiryAlerts')
+
+export const listenExpiryAlerts = (
+  cb: (docs: (ExpiryAlert & { id: string })[]) => void,
+  unreadOnly = true,
+): Unsubscribe => {
+  const constraints = unreadOnly
+    ? [where('isRead', '==', false), orderBy('daysRemaining', 'asc')]
+    : [orderBy('daysRemaining', 'asc')]
+  const q = query(expiryAlertsRef(), ...constraints)
+  return onSnapshot(q, (snap) =>
+    cb(snap.docs.map((d) => ({ id: d.id, ...d.data() } as ExpiryAlert & { id: string }))),
+  )
+}
+
+export const listenAllExpiryAlerts = (
+  cb: (docs: (ExpiryAlert & { id: string })[]) => void,
+): Unsubscribe => {
+  return listenExpiryAlerts(cb, false)
+}
+
+export const listenUnreadExpiryAlertsCount = (
+  cb: (count: number) => void,
+): Unsubscribe => {
+  const q = query(expiryAlertsRef(), where('isRead', '==', false))
+  return onSnapshot(q, (snap) => cb(snap.size))
+}
+
+export const markExpiryAlertRead = (alertId: string) =>
+  updateDoc(doc(db, `expiryAlerts/${alertId}`), {
+    isRead: true,
+    resolvedAt: serverTimestamp(),
+  })
+
+export const resolveExpiryAlert = (alertId: string) =>
+  updateDoc(doc(db, `expiryAlerts/${alertId}`), {
+    isRead: true,
+    resolvedAt: serverTimestamp(),
+  })
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Notifications
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const notificationsRef = (uid: string) =>
+  collection(db, `notifications/${uid}/items`)
+
+export const notificationDoc = (uid: string, id: string) =>
+  doc(db, `notifications/${uid}/items`, id)
+
+export const listenNotifications = (
+  uid: string,
+  cb: (items: (NotificationItem & { id: string })[]) => void,
+): Unsubscribe => {
+  const q = query(notificationsRef(uid), where('isRead', '==', false), limit(50))
+  return onSnapshot(
+    q,
+    (snap) => {
+      const items = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as NotificationItem & { id: string }))
+        .sort((a, b) => {
+          const aMs = a.createdAt?.toMillis?.() ?? 0
+          const bMs = b.createdAt?.toMillis?.() ?? 0
+          return bMs - aMs
+        })
+      cb(items)
+    },
+    (error) => {
+      console.error('[Notifications] onSnapshot error:', error.code, error.message)
+    },
+  )
+}
+
+export const markNotificationRead = (uid: string, id: string) =>
+  updateDoc(notificationDoc(uid, id), { isRead: true })
+
+export const markAllNotificationsRead = async (uid: string, ids: string[]) => {
+  if (!ids.length) return
+  const batch = writeBatch(db)
+  ids.forEach((id) => {
+    batch.update(notificationDoc(uid, id), { isRead: true })
+  })
+  await batch.commit()
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Import Doc Audit
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const importDocAuditRef = () => collection(db, 'importDocAudit')
+
+export const addImportDocAudit = (data: Omit<ImportDocAudit, 'id'>) =>
+  addDoc(importDocAuditRef(), { ...data, timestamp: serverTimestamp() })
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Inventory Transactions — flat collection helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const inventoryTransactionDoc = (id: string) =>
+  doc(db, `inventoryTransactions/${id}`)
+
+export const updateInventoryTransaction = (
+  id: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any
+) => updateDoc(inventoryTransactionDoc(id), data)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PM Schedules & Work Orders
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const pmSchedulesRef = () => collection(db, 'pmSchedules')
+export const pmWorkOrdersRef = () => collection(db, 'pmWorkOrders')
+export const pmScheduleDoc = (id: string) => doc(db, `pmSchedules/${id}`)
+export const pmWorkOrderDoc = (id: string) => doc(db, `pmWorkOrders/${id}`)
+
+export const listenPmSchedules = (
+  cb: (docs: (import('@/types/firestore').PMSchedule & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(pmSchedulesRef(), orderBy('nextDueDate', 'asc')),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').PMSchedule & { id: string }))
+      ),
+  )
+}
+
+export const addPmSchedule = (data: Omit<import('@/types/firestore').PMSchedule, 'id'>) =>
+  addDoc(pmSchedulesRef(), data)
+
+export const updatePmSchedule = (id: string, data: Partial<import('@/types/firestore').PMSchedule>) =>
+  updateDoc(pmScheduleDoc(id), { ...data, updatedAt: serverTimestamp() })
+
+export const listenPmWorkOrders = (
+  cb: (docs: (import('@/types/firestore').PMWorkOrder & { id: string })[]) => void,
+  status?: string,
+): Unsubscribe => {
+  const q = status
+    ? query(pmWorkOrdersRef(), where('status', '==', status), orderBy('dueDate', 'asc'), limit(100))
+    : query(pmWorkOrdersRef(), orderBy('dueDate', 'asc'), limit(100))
+  return onSnapshot(q, (snap) =>
+    cb(
+      snap.docs.map((d) => ({
+        ...(d.data() as object),
+        id: d.id,
+      } as import('@/types/firestore').PMWorkOrder & { id: string }))
+    ),
+  )
+}
+
+export const addPmWorkOrder = (data: Omit<import('@/types/firestore').PMWorkOrder, 'id'>) =>
+  addDoc(pmWorkOrdersRef(), data)
+
+export const updatePmWorkOrder = (
+  id: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any
+) => updateDoc(pmWorkOrderDoc(id), data)
+
+export const listenPmSchedulesByAsset = (
+  assetId: string,
+  cb: (docs: (import('@/types/firestore').PMSchedule & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(pmSchedulesRef(), where('assetId', '==', assetId), where('isActive', '==', true)),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').PMSchedule & { id: string }))
+      ),
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Disposal Workflow (P2.2)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const disposalRequestsRef = () => collection(db, 'disposalRequests')
+export const disposalRequestDoc = (id: string) => doc(db, `disposalRequests/${id}`)
+
+export const listenDisposalRequests = (
+  cb: (docs: (import('@/types/firestore').DisposalRequest & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(disposalRequestsRef(), orderBy('requestedAt', 'desc')),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').DisposalRequest & { id: string }))
+      ),
+  )
+}
+
+export const addDisposalRequest = (
+  data: Omit<import('@/types/firestore').DisposalRequest, 'id'>,
+) => addDoc(disposalRequestsRef(), data)
+
+export const updateDisposalRequest = (id: string, data: Partial<import('@/types/firestore').DisposalRequest>) =>
+  updateDoc(disposalRequestDoc(id), data as Partial<import('@/types/firestore').DisposalRequest>)
+
+export const disposalCouncilsRef = () => collection(db, 'disposalCouncils')
+export const disposalCouncilDoc = (id: string) => doc(db, `disposalCouncils/${id}`)
+
+export const listenDisposalCouncils = (
+  cb: (docs: (import('@/types/firestore').DisposalCouncil & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(disposalCouncilsRef(), orderBy('meetingDate', 'desc')),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').DisposalCouncil & { id: string }))
+      ),
+  )
+}
+
+export const addDisposalCouncil = (
+  data: Omit<import('@/types/firestore').DisposalCouncil, 'id'>,
+) => addDoc(disposalCouncilsRef(), data)
+
+export const updateDisposalCouncil = (id: string, data: Partial<import('@/types/firestore').DisposalCouncil>) =>
+  updateDoc(disposalCouncilDoc(id), data as Partial<import('@/types/firestore').DisposalCouncil>)
+
+export const disposalCouncilVotesRef = (councilId: string) =>
+  collection(db, `disposalCouncils/${councilId}/votes`)
+
+export const disposalCouncilVoteDoc = (councilId: string, requestId: string) =>
+  doc(db, `disposalCouncils/${councilId}/votes/${requestId}`)
+
+export const listenDisposalCouncilVotes = (
+  councilId: string,
+  cb: (docs: (import('@/types/firestore').CouncilVote & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(disposalCouncilVotesRef(councilId)),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').CouncilVote & { id: string }))
+      ),
+  )
+}
+
+export const setDisposalCouncilVote = (
+  councilId: string,
+  requestId: string,
+  data: Omit<import('@/types/firestore').CouncilVote, 'id'>,
+) => setDoc(disposalCouncilVoteDoc(councilId, requestId), data)
+
+export const disposalExecutionsRef = () => collection(db, 'disposalExecutions')
+export const disposalExecutionDoc = (id: string) => doc(db, `disposalExecutions/${id}`)
+
+export const listenDisposalExecutions = (
+  cb: (docs: (import('@/types/firestore').DisposalExecution & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(disposalExecutionsRef(), orderBy('createdAt', 'desc')),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').DisposalExecution & { id: string }))
+      ),
+  )
+}
+
+export const addDisposalExecution = (
+  data: Omit<import('@/types/firestore').DisposalExecution, 'id'>,
+) => addDoc(disposalExecutionsRef(), data)

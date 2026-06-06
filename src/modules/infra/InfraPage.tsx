@@ -1,18 +1,26 @@
 import { useState, useEffect } from 'react'
 import { listenSystemReadings } from '@/firebase/db'
-import type { InfraSystem } from '@/firebase/types'
+import type { InfraSystem, OperationLogShift } from '@/firebase/types'
 import Modal from '@/components/ui/Modal'
 import { CardSkeleton } from '@/components/ui/Table'
 import { toast } from '@/components/ui/Toast'
 import {
   Zap, Droplets, Wind, Wind as O2Icon, Power, Flame,
   Thermometer, Gauge, ArrowUpDown, AlertTriangle, CheckCircle2,
-  Clock, MapPin, User, FileText,
+  Clock, MapPin, User, FileText, BookMarked,
 } from 'lucide-react'
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
+import {
+  collection, query, where, getDocs,
+  onSnapshot, orderBy, limit,
+} from 'firebase/firestore'
+import { db } from '@/firebase/config'
+import { Timestamp } from 'firebase/firestore'
+import OperationLogModal from './OperationLogModal'
+import OperationLogList from './OperationLogList'
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -142,14 +150,14 @@ function EnergyChart({ data }: { data: { day: string; value: number }[] }) {
     <div className="card p-4">
       <h3 className="text-sm font-semibold text-gray-200 mb-1">Điện — 7 ngày</h3>
       <p className="text-xs text-gray-500 mb-3">kWh tiêu thụ</p>
-      <ResponsiveContainer width="100%" height={140}>
+      <ResponsiveContainer width="100%" height={300}>
         <BarChart data={data} margin={{ top: 2, right: 4, bottom: 0, left: -20 }}>
           <CartesianGrid strokeDasharray="2 2" stroke="rgba(255,255,255,0.06)" />
           <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#6b7280' }} />
           <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} />
           <Tooltip
-            contentStyle={{ background: '#1a1f2e', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
-            labelStyle={{ color: '#9ca3af' }}
+            contentStyle={{ background: '#1c2a3f', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, fontSize: 12, color: '#9baec8' }}
+            labelStyle={{ color: '#9baec8' }}
             itemStyle={{ color: '#facc15' }}
           />
           <Bar dataKey="value" radius={[3, 3, 0, 0]}>
@@ -170,14 +178,14 @@ function WaterChart({ data }: { data: { day: string; value: number }[] }) {
     <div className="card p-4">
       <h3 className="text-sm font-semibold text-gray-200 mb-1">Nước — 7 ngày</h3>
       <p className="text-xs text-gray-500 mb-3">m³ tiêu thụ</p>
-      <ResponsiveContainer width="100%" height={140}>
+      <ResponsiveContainer width="100%" height={300}>
         <LineChart data={data} margin={{ top: 2, right: 4, bottom: 0, left: -20 }}>
           <CartesianGrid strokeDasharray="2 2" stroke="rgba(255,255,255,0.06)" />
           <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#6b7280' }} />
           <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} />
           <Tooltip
-            contentStyle={{ background: '#1a1f2e', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
-            labelStyle={{ color: '#9ca3af' }}
+            contentStyle={{ background: '#1c2a3f', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, fontSize: 12, color: '#9baec8' }}
+            labelStyle={{ color: '#9baec8' }}
             itemStyle={{ color: '#60a5fa' }}
           />
           <Line type="monotone" dataKey="value" stroke="#60a5fa" strokeWidth={2} dot={false} />
@@ -398,10 +406,137 @@ export default function InfraPage() {
   const [selectedLift, setSelectedLift] = useState<LiftUnit | null>(null)
   const [selectedTile, setSelectedTile] = useState<SystemTileData | null>(null)
 
+  const [hvacReadings, setHvacReadings] = useState<Record<string, number>>({})
+  const [liftData, setLiftData] = useState<LiftUnit[]>([])
+  const [energyData, setEnergyData] = useState<{ day: string; value: number }[]>([])
+  const [waterData, setWaterData] = useState<{ day: string; value: number }[]>([])
+
+  const [activeTab, setActiveTab] = useState<'overview' | 'logs'>('overview')
+  const [showLogModal, setShowLogModal] = useState(false)
+  const [logRefreshKey, setLogRefreshKey] = useState(0)
+  const [todayShiftLogged, setTodayShiftLogged] = useState<{ shift: OperationLogShift } | null>(null)
+
+  // Track whether today's current shift has been logged
+  useEffect(() => {
+    const getShift = (): OperationLogShift => {
+      const h = new Date().getHours()
+      if (h >= 6 && h < 14) return 'morning'
+      if (h >= 14 && h < 22) return 'afternoon'
+      return 'night'
+    }
+    const today = new Date().toISOString().split('T')[0]
+    const currentShift = getShift()
+    const q = query(
+      collection(db, 'operationLogs'),
+      where('date', '==', today),
+      where('shift', '==', currentShift),
+      limit(1),
+    )
+    const unsub = onSnapshot(q, (snap) => {
+      if (!snap.empty) {
+        setTodayShiftLogged({ shift: currentShift })
+      }
+    })
+    return () => unsub()
+  }, [])
+
   useEffect(() => {
     const unsub = listenSystemReadings(setSystems)
     const timer = setTimeout(() => setLoading(false), 1200)
     return () => { unsub(); clearTimeout(timer) }
+  }, [])
+
+  // HVAC capacity readings from Firestore
+  useEffect(() => {
+    const q = query(collection(db, 'systemReadings'), where('type', '==', 'hvac'))
+    const unsub = onSnapshot(q, (snap) => {
+      const readings: Record<string, number> = {}
+      snap.docs.forEach((doc) => {
+        const d = doc.data()
+        readings[doc.id] = d.value ?? 0
+      })
+      setHvacReadings(readings)
+    })
+    return () => unsub()
+  }, [])
+
+  // Lift data from Firestore
+  useEffect(() => {
+    const liftQ = query(collection(db, 'systemReadings'), where('type', '==', 'lift'))
+    const unsub = onSnapshot(liftQ, (snap) => {
+      if (snap.empty) {
+        setLiftData([
+          { id: 'lift-s1', name: 'Thang máy S1 — Khu A', floors: 'B1→T5', trips: 1284, status: 'ok' },
+          { id: 'lift-s2', name: 'Thang máy S2 — Khu B', floors: 'T1→T4', trips: 892, status: 'ok' },
+          { id: 'lift-s3', name: 'Thang máy S3 — Khu C', floors: 'T1→T3', trips: 0, status: 'warn' },
+        ])
+      } else {
+        setLiftData(snap.docs.map((d) => {
+          const data = d.data()
+          return {
+            id: d.id,
+            name: data.name ?? d.id,
+            floors: data.floors ?? '—',
+            trips: data.trips ?? 0,
+            status: (data.status as ReadingStatus) ?? 'ok',
+          }
+        }))
+      }
+    })
+    return () => unsub()
+  }, [])
+
+  // 7-day energy and water chart data from Firestore
+  useEffect(() => {
+    const fetchChartData = async () => {
+      const sevenDaysAgo = Timestamp.fromMillis(Date.now() - 7 * 24 * 60 * 60 * 1000)
+      const days = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
+
+      const energySnap = await getDocs(
+        query(
+          collection(db, 'systemReadings'),
+          where('systemId', '==', 'power'),
+          where('timestamp', '>=', sevenDaysAgo),
+          orderBy('timestamp', 'asc'),
+          limit(7),
+        )
+      )
+      if (energySnap.empty) {
+        setEnergyData([
+          { day: 'T2', value: 820 }, { day: 'T3', value: 910 }, { day: 'T4', value: 870 },
+          { day: 'T5', value: 950 }, { day: 'T6', value: 1020 }, { day: 'T7', value: 880 },
+          { day: 'CN', value: 740 },
+        ])
+      } else {
+        setEnergyData(energySnap.docs.map((d, i) => ({
+          day: days[i] ?? `D${i + 1}`,
+          value: d.data().value ?? 0,
+        })))
+      }
+
+      const waterSnap = await getDocs(
+        query(
+          collection(db, 'systemReadings'),
+          where('systemId', '==', 'water'),
+          where('timestamp', '>=', sevenDaysAgo),
+          orderBy('timestamp', 'asc'),
+          limit(7),
+        )
+      )
+      if (waterSnap.empty) {
+        setWaterData([
+          { day: 'T2', value: 240 }, { day: 'T3', value: 265 }, { day: 'T4', value: 248 },
+          { day: 'T5', value: 280 }, { day: 'T6', value: 310 }, { day: 'T7', value: 258 },
+          { day: 'CN', value: 195 },
+        ])
+      } else {
+        setWaterData(waterSnap.docs.map((d, i) => ({
+          day: days[i] ?? `D${i + 1}`,
+          value: d.data().value ?? 0,
+        })))
+      }
+    }
+    fetchChartData()
   }, [])
 
   // Build tile data from Firestore
@@ -434,30 +569,8 @@ export default function InfraPage() {
     location: s.location,
     status: toReadingStatus(s),
     temp: s.lastReading,
-    capacity: 65 + Math.floor(Math.random() * 20),
+    capacity: hvacReadings[s.id] ?? s.lastReading,
   }))
-
-  // Lift units (seeded from incidents for demo)
-  const liftUnits: LiftUnit[] = [
-    { id: 'lift-1', name: 'Thang máy 1', floors: 'B1→5', trips: 47, status: 'ok' },
-    { id: 'lift-2', name: 'Thang máy 2', floors: 'B1→10', trips: 63, status: 'ok' },
-    { id: 'lift-3', name: 'Thang máy 3', floors: '1→5', trips: 31, status: 'warn' },
-    { id: 'lift-4', name: 'Thang máy bệnh nhân', floors: 'B1→10', trips: 18, status: 'ok' },
-  ]
-
-  // Energy chart (7-day mock from incidents count)
-  const energyData = [
-    { day: 'T2', value: 820 }, { day: 'T3', value: 910 }, { day: 'T4', value: 870 },
-    { day: 'T5', value: 950 }, { day: 'T6', value: 1020 }, { day: 'T7', value: 880 },
-    { day: 'CN', value: 740 },
-  ]
-
-  // Water chart (7-day mock)
-  const waterData = [
-    { day: 'T2', value: 240 }, { day: 'T3', value: 265 }, { day: 'T4', value: 248 },
-    { day: 'T5', value: 280 }, { day: 'T6', value: 310 }, { day: 'T7', value: 258 },
-    { day: 'CN', value: 195 },
-  ]
 
   // Ensure we have 8 tile slots
   const SYSTEM_DEFS = [
@@ -507,9 +620,59 @@ export default function InfraPage() {
     <div className="space-y-4">
       {/* Header */}
       <div>
-        <h1 className="text-lg font-bold text-gray-100">Hạ tầng kỹ thuật</h1>
-        <p className="text-sm text-gray-500">Giám sát trạng thái các hệ thống — Cập nhật theo thời gian thực</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold text-gray-100">Hạ tầng kỹ thuật</h1>
+            <p className="text-sm text-gray-500">Giám sát trạng thái các hệ thống — Cập nhật theo thời gian thực</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {todayShiftLogged ? (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 bg-green-500/15 text-green-400 text-xs font-medium rounded-full border border-green-500/20">
+                <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
+                Ca {todayShiftLogged.shift === 'morning' ? 'sáng' : todayShiftLogged.shift === 'afternoon' ? 'chiều' : 'đêm'} đã ghi
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 bg-amber/15 text-amber text-xs font-medium rounded-full border border-amber/20 animate-pulse">
+                <span className="w-1.5 h-1.5 bg-amber rounded-full" />
+                Chưa ghi nhật ký ca này
+              </span>
+            )}
+            <button
+              onClick={() => setShowLogModal(true)}
+              className="btn-primary flex items-center gap-1.5 text-sm"
+            >
+              <BookMarked className="w-4 h-4" />
+              Ghi nhật ký
+            </button>
+          </div>
+        </div>
       </div>
+
+      {/* Tab group */}
+      <div className="flex gap-1 border-b border-white/[0.08]">
+        {[
+          { key: 'overview', label: 'Tổng quan' },
+          { key: 'logs', label: 'Nhật ký vận hành' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key as 'overview' | 'logs')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === tab.key
+                ? 'border-amber text-amber'
+                : 'border-transparent text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      {activeTab === 'logs' ? (
+        <OperationLogList refreshKey={logRefreshKey} />
+      ) : (
+        <>
 
       {/* Alerts */}
       {(critCount > 0 || warnCount > 0) && (
@@ -586,11 +749,11 @@ export default function InfraPage() {
               <ArrowUpDown className="w-4 h-4 text-gray-400" />
               Thang máy
             </h3>
-            <span className="text-xs text-gray-500">{liftUnits.length} thang</span>
+            <span className="text-xs text-gray-500">{liftData.length} thang</span>
           </div>
           <div className="p-3">
             <div className="grid grid-cols-2 gap-3">
-              {liftUnits.map((l) => (
+              {liftData.map((l) => (
                 <LiftCard key={l.id} lift={l} onClick={() => setSelectedLift(l)} />
               ))}
             </div>
@@ -603,11 +766,18 @@ export default function InfraPage() {
         <EnergyChart data={energyData} />
         <WaterChart data={waterData} />
       </div>
+        </>
+      )}
 
       {/* Modals */}
       <HvacDetailModal unit={selectedHvac} open={!!selectedHvac} onClose={() => setSelectedHvac(null)} />
       <LiftDetailModal lift={selectedLift} open={!!selectedLift} onClose={() => setSelectedLift(null)} />
       <SystemDetailModal system={selectedTile} open={!!selectedTile} onClose={() => setSelectedTile(null)} />
+      <OperationLogModal
+        isOpen={showLogModal}
+        onClose={() => setShowLogModal(false)}
+        onSaved={() => setLogRefreshKey((k) => k + 1)}
+      />
     </div>
   )
 }

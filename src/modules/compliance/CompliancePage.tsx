@@ -85,18 +85,18 @@ function CalibrationTab() {
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="table-desktop">
             <thead>
-              <tr className="border-b border-white/[0.07]">
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Thiết bị</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden md:table-cell">Đơn vị KĐ</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden sm:table-cell">KĐ gần nhất</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">KĐ tiếp theo</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden lg:table-cell">Số chứng chỉ</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Còn lại</th>
+              <tr>
+                <th className="text-left">Thiết bị</th>
+                <th className="text-left hidden md:table-cell">Đơn vị KĐ</th>
+                <th className="text-left hidden sm:table-cell">KĐ gần nhất</th>
+                <th className="text-left">KĐ tiếp theo</th>
+                <th className="text-left hidden lg:table-cell">Số chứng chỉ</th>
+                <th className="text-left">Còn lại</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/[0.04]">
+            <tbody>
               {schedules.map((s) => (
                 <tr key={s.id} className="hover:bg-white/[0.03]">
                   <td className="px-4 py-3 font-medium text-gray-100">{s.deviceName}</td>
@@ -198,18 +198,18 @@ function LegalTab() {
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="table-desktop">
             <thead>
-              <tr className="border-b border-white/[0.07]">
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Loại GCN</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden md:table-cell">Số hiệu</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Ngày cấp</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Ngày hết hạn</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden lg:table-cell">Cơ quan</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">File</th>
+              <tr>
+                <th className="text-left">Loại GCN</th>
+                <th className="text-left hidden md:table-cell">Số hiệu</th>
+                <th className="text-left">Ngày cấp</th>
+                <th className="text-left">Ngày hết hạn</th>
+                <th className="text-left hidden lg:table-cell">Cơ quan</th>
+                <th className="text-left">File</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/[0.04]">
+            <tbody>
               {docs.map((d) => (
                 <tr key={d.id} className="hover:bg-white/[0.03]">
                   <td className="px-4 py-3">
@@ -303,17 +303,17 @@ function ContractorsTab() {
     <div className="space-y-4">
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="table-desktop">
             <thead>
-              <tr className="border-b border-white/[0.07]">
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Nhà thầu</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden sm:table-cell">Loại dịch vụ</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden md:table-cell">Hạn HĐ</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Bảo hiểm</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden lg:table-cell">Đánh giá</th>
+              <tr>
+                <th className="text-left">Nhà thầu</th>
+                <th className="text-left hidden sm:table-cell">Loại dịch vụ</th>
+                <th className="text-left hidden md:table-cell">Hạn HĐ</th>
+                <th className="text-left">Bảo hiểm</th>
+                <th className="text-left hidden lg:table-cell">Đánh giá</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/[0.04]">
+            <tbody>
               {vendors.map((v) => {
                 const daysLeft = getDaysLeft(v)
                 return (

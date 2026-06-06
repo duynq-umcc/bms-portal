@@ -17,12 +17,22 @@
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-gray-100;
+    background: #111827;
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-gray-300 rounded-full;
+    background: #374151;
+    border-radius: 9999px;
   }
+}
+
+.sidebar-section-label {
+  font-size: 10px;
+  color: #5a7196;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 16px 18px 6px;
+  font-weight: 700;
 }
 
 @layer components {
@@ -44,11 +54,43 @@
            disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
-  .input-field {
-    @apply w-full px-3 py-2 border border-white/[0.1] rounded-lg text-sm
-           bg-white/[0.05] text-gray-100
-           focus:outline-none focus:ring-2 focus:ring-amber/50 focus:border-amber/30
-           placeholder-t2 transition-colors;
+  .input-field,
+  .form-input,
+  select {
+    background-color: #1c2a3f;
+    color: #f0f4ff;
+    border: 0.5px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 7px 32px 7px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239baec8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    transition: border-color 0.15s;
+  }
+
+  .input-field:focus,
+  .form-input:focus,
+  select:focus {
+    border-color: rgba(96, 165, 250, 0.5);
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.15);
+    outline: none;
+  }
+
+  .input-field::placeholder,
+  .form-input::placeholder {
+    color: #5a7196;
+  }
+
+  select option {
+    background-color: #1c2a3f;
+    color: #f0f4ff;
+    padding: 6px 12px;
   }
 
   .card {
@@ -86,6 +128,42 @@
   .badge-gray {
     @apply badge bg-white/[0.08] text-t2;
   }
+
+  .table-desktop {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .table-desktop th {
+    font-size: 11px;
+    font-weight: 700;
+    color: #5a7196;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+    white-space: nowrap;
+    background: transparent;
+  }
+  .table-desktop td {
+    font-size: 13px;
+    padding: 10px 14px;
+    color: #9baec8;
+  }
+  .table-desktop td:first-child {
+    color: #f0f4ff;
+    font-weight: 600;
+  }
+  .table-desktop tr {
+    border-bottom: 1px solid rgba(255,255,255,.04);
+  }
+  .table-desktop tr:hover td {
+    background: rgba(255,255,255,.03);
+  }
+
+  .card-desktop {
+    padding: 18px 22px;
+  }
 }
 
 @layer utilities {
@@ -122,6 +200,15 @@
 
 .animate-slide-in {
   animation: slide-in 0.25s ease-out;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.animate-pulse-badge {
+  animation: pulse-badge 2s ease-in-out infinite;
 }
 
 @media print {

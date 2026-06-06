@@ -116,18 +116,18 @@ function DrillsTab({ drills, incidents, onAddDrill }: {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="table-desktop">
           <thead>
-            <tr className="border-b border-white/[0.07]">
-              <th className="text-left px-3 py-2.5 font-medium text-t3 text-xs">Ngày</th>
-              <th className="text-left px-3 py-2.5 font-medium text-t3 text-xs hidden sm:table-cell">Khu vực</th>
-              <th className="text-left px-3 py-2.5 font-medium text-t3 text-xs hidden md:table-cell">Loại</th>
-              <th className="text-left px-3 py-2.5 font-medium text-t3 text-xs hidden lg:table-cell">Người phụ trách</th>
-              <th className="text-left px-3 py-2.5 font-medium text-t3 text-xs">Kết quả</th>
-              <th className="text-left px-3 py-2.5 font-medium text-t3 text-xs hidden xl:table-cell">Ghi chú</th>
+            <tr>
+              <th className="text-left">Ngày</th>
+              <th className="text-left hidden sm:table-cell">Khu vực</th>
+              <th className="text-left hidden md:table-cell">Loại</th>
+              <th className="text-left hidden lg:table-cell">Người phụ trách</th>
+              <th className="text-left">Kết quả</th>
+              <th className="text-left hidden xl:table-cell">Ghi chú</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody>
             {drills.map((d) => (
               <tr key={d.id} className="hover:bg-white/[0.03]">
                 <td className="px-3 py-3 text-gray-300 text-xs">{d.date ? format(d.date.toDate(), 'dd/MM/yyyy', { locale: vi }) : '—'}</td>

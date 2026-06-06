@@ -302,18 +302,18 @@ function ContractsTab() {
       </div>
 
       <div className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="table-desktop">
           <thead>
-            <tr className="border-b border-white/[0.07]">
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Nhà thầu</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden sm:table-cell">Số HĐ</th>
-              <th className="text-right px-4 py-3 font-medium text-t3 text-xs">Giá trị</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden md:table-cell">Bắt đầu</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden md:table-cell">Kết thúc</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Còn lại</th>
+            <tr>
+              <th className="text-left">Nhà thầu</th>
+              <th className="text-left hidden sm:table-cell">Số HĐ</th>
+              <th className="text-right">Giá trị</th>
+              <th className="text-left hidden md:table-cell">Bắt đầu</th>
+              <th className="text-left hidden md:table-cell">Kết thúc</th>
+              <th className="text-left">Còn lại</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody>
             {allContracts.length === 0 && (
               <tr><td colSpan={6} className="text-center py-8 text-t3 text-sm">
                 {selectedVendor ? 'Chưa có hợp đồng' : 'Chọn nhà thầu để xem hợp đồng'}
@@ -375,10 +375,10 @@ function RatingsTab() {
   const radarData = (() => {
     return [
       { criteria: 'Chất lượng', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, v.rating])) },
-      { criteria: 'Tiến độ', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (Math.random() > 0.5 ? 0.5 : -0.3))])) },
-      { criteria: 'Giá cả', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (Math.random() > 0.5 ? 0.2 : -0.4))])) },
-      { criteria: 'Hỗ trợ', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (Math.random() > 0.5 ? 0.3 : -0.2))])) },
-      { criteria: 'An toàn', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (Math.random() > 0.5 ? 0.4 : -0.1))])) },
+      { criteria: 'Tiến độ', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (i % 2 === 0 ? 0.5 : -0.3))])) },
+      { criteria: 'Giá cả', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (i % 3 === 0 ? 0.2 : -0.4))])) },
+      { criteria: 'Hỗ trợ', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (i % 2 === 1 ? 0.3 : -0.2))])) },
+      { criteria: 'An toàn', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (i % 4 === 0 ? 0.4 : -0.1))])) },
     ]
   })()
 
@@ -393,15 +393,15 @@ function RatingsTab() {
     <div className="space-y-4">
       {/* Table */}
       <div className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="table-desktop">
           <thead>
-            <tr className="border-b border-white/[0.07]">
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Nhà thầu</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden sm:table-cell">Loại</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Đánh giá</th>
+            <tr>
+              <th className="text-left">Nhà thầu</th>
+              <th className="text-left hidden sm:table-cell">Loại</th>
+              <th className="text-left">Đánh giá</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody>
             {vendors.map((v) => (
               <tr key={v.id} className="hover:bg-white/[0.03]">
                 <td className="px-4 py-3">

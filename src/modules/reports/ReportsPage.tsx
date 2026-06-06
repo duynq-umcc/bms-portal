@@ -221,7 +221,7 @@ export default function ReportsPage() {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-bold text-gray-900">Báo cáo KPI</h1>
+          <h1 className="text-lg font-bold text-gray-100">Báo cáo KPI</h1>
           <p className="text-sm text-gray-500">
             {latest ? `${latest.month}/${latest.year}` : `${month}/${year}`} · {tab === 'month' ? 'Tháng' : tab === 'quarter' ? 'Quý' : 'Năm'}
           </p>
@@ -279,7 +279,7 @@ export default function ReportsPage() {
               <TrendingUp className="w-4 h-4 text-amber" />
               Chỉ số KPI — {latest.month}/{latest.year}
             </h3>
-            <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4">
               {kpiData.map((k) => (
                 <KPIBar key={k.label} label={k.label} actual={k.actual} target={k.target} />
               ))}
@@ -291,7 +291,7 @@ export default function ReportsPage() {
           </div>
 
           {/* Section 2 & 3: Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Cost breakdown */}
             <div className="card p-4">
               <h3 className="font-semibold text-gray-100 text-sm mb-4 flex items-center gap-2">
@@ -379,14 +379,14 @@ export default function ReportsPage() {
               </h3>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="table-desktop text-sm">
                 <thead>
-                  <tr className="border-b border-white/[0.07]">
-                    <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Hệ thống</th>
-                    <th className="text-right px-4 py-3 font-medium text-t3 text-xs">Uptime %</th>
-                    <th className="text-right px-4 py-3 font-medium text-t3 text-xs">Sự cố</th>
-                    <th className="text-right px-4 py-3 font-medium text-t3 text-xs hidden sm:table-cell">MTTR (h)</th>
-                    <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden md:table-cell">vs tháng trước</th>
+                  <tr>
+                    <th className="text-left">Hệ thống</th>
+                    <th className="text-right">Uptime %</th>
+                    <th className="text-right">Sự cố</th>
+                    <th className="text-right hidden sm:table-cell">MTTR (h)</th>
+                    <th className="text-left hidden md:table-cell">vs tháng trước</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.04]">

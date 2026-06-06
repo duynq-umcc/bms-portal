@@ -321,18 +321,18 @@ export default function OrgPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="table-desktop">
             <thead>
-              <tr className="border-b border-white/[0.07]">
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs uppercase tracking-wide">Họ tên</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs uppercase tracking-wide hidden md:table-cell">Chức vụ</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs uppercase tracking-wide hidden lg:table-cell">Phòng ban</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs uppercase tracking-wide hidden sm:table-cell">SĐT</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs uppercase tracking-wide hidden xl:table-cell">Email</th>
-                <th className="text-left px-4 py-3 font-medium text-t3 text-xs uppercase tracking-wide">Trạng thái</th>
+              <tr>
+                <th className="text-left">Họ tên</th>
+                <th className="text-left hidden md:table-cell">Chức vụ</th>
+                <th className="text-left hidden lg:table-cell">Phòng ban</th>
+                <th className="text-left hidden sm:table-cell">SĐT</th>
+                <th className="text-left hidden xl:table-cell">Email</th>
+                <th className="text-left">Trạng thái</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/[0.04]">
+            <tbody>
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-12">

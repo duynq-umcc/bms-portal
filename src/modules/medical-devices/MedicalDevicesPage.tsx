@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { listenMedicalDevices, listenServiceHistory, addServiceRecord, listenMaintenanceSchedule, addMaintenanceSchedule } from '@/firebase/db'
+import { listenMedicalDevices, listenServiceHistory, addServiceRecord, listenMaintenanceSchedule, addMaintenanceSchedule, listenPmSchedulesByAsset } from '@/firebase/db'
 import type { MedicalDevice, ServiceRecord, MaintenanceSchedule } from '@/firebase/types'
 import { TableSkeleton, EmptyState } from '@/components/ui/Table'
 import Modal from '@/components/ui/Modal'
@@ -10,14 +10,16 @@ import { z } from 'zod'
 import {
   Stethoscope, Search, Plus, Clock, AlertTriangle,
   Calendar, FileText, Info, History, FolderOpen,
-  WrenchIcon, RefreshCw,
+  WrenchIcon, RefreshCw, ShieldCheck,
 } from 'lucide-react'
 import { format, differenceInDays, isBefore, startOfMonth, endOfMonth, startOfQuarter, endOfQuarter } from 'date-fns'
+import PmScheduleFormModal from '../maintenance/PmScheduleFormModal'
+import type { PMSchedule } from '@/types/firestore'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DeviceTab = 'devices' | 'schedule' | 'calibration'
-type DetailTab = 'info' | 'history' | 'docs'
+type DetailTab = 'info' | 'history' | 'pm' | 'docs'
 
 const DEVICE_STATUS_COLORS: Record<string, string> = {
   active: 'badge-success',
@@ -90,7 +92,7 @@ function AddScheduleModal({ devices, open, onClose }: { devices: MedicalDevice[]
     <Modal open={open} onClose={() => { onClose(); reset() }} title="Thêm lịch bảo trì" size="md">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Thiết bị *</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Thiết bị *</label>
           <select {...register('deviceId')} className="input-field">
             <option value="">— Chọn thiết bị —</option>
             {devices.map((d) => (
@@ -100,12 +102,12 @@ function AddScheduleModal({ devices, open, onClose }: { devices: MedicalDevice[]
           {errors.deviceId && <p className="text-red-500 text-xs mt-1">{errors.deviceId.message}</p>}
         </div>
         {selectedDevice && (
-          <div className="text-xs text-gray-500 px-2 py-1 bg-gray-50 rounded">
+          <div className="text-xs text-t3 px-2 py-1 bg-white/[0.05] rounded">
             {selectedDevice.model} · {selectedDevice.serial} · {selectedDevice.location}
           </div>
         )}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Loại bảo trì *</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Loại bảo trì *</label>
           <select {...register('type')} className="input-field">
             <option value="">— Chọn loại —</option>
             <option value="preventive">Bảo trì định kỳ</option>
@@ -116,16 +118,16 @@ function AddScheduleModal({ devices, open, onClose }: { devices: MedicalDevice[]
           {errors.type && <p className="text-red-500 text-xs mt-1">{errors.type.message}</p>}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Ngày lên lịch *</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Ngày lên lịch *</label>
           <input type="date" {...register('scheduledDate')} className="input-field" />
           {errors.scheduledDate && <p className="text-red-500 text-xs mt-1">{errors.scheduledDate.message}</p>}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Nhân viên phụ trách</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Nhân viên phụ trách</label>
           <input {...register('assignedTo')} className="input-field" placeholder="Tên nhân viên..." />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Ghi chú</label>
           <textarea {...register('notes')} className="input-field" rows={2} placeholder="Ghi chú thêm..." />
         </div>
         <button type="submit" disabled={isSubmitting} className="btn-primary w-full">
@@ -142,15 +144,21 @@ function DeviceDetailModal({ device }: { device: MedicalDevice | null }) {
   const [detailTab, setDetailTab] = useState<DetailTab>('info')
   const [history, setHistory] = useState<(ServiceRecord & { id: string })[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
+  const [pmSchedules, setPmSchedules] = useState<(PMSchedule & { id: string })[]>([])
+  const [showPmForm, setShowPmForm] = useState(false)
 
   useEffect(() => {
     if (!device?.id) return
     setLoadingHistory(true)
-    const unsub = listenServiceHistory(device.id, (records) => {
+    const unsubHistory = listenServiceHistory(device.id, (records) => {
       setHistory(records)
       setLoadingHistory(false)
     })
-    return () => unsub()
+    const unsubPm = listenPmSchedulesByAsset(
+      device.id,
+      setPmSchedules as (docs: (PMSchedule & { id: string })[]) => void
+    )
+    return () => { unsubHistory(); unsubPm() }
   }, [device?.id])
 
   if (!device) return null
@@ -158,17 +166,18 @@ function DeviceDetailModal({ device }: { device: MedicalDevice | null }) {
   const tabs: { id: DetailTab; label: string; icon: any }[] = [
     { id: 'info', label: 'Thông tin', icon: Info },
     { id: 'history', label: 'Lịch sử BT', icon: History },
+    { id: 'pm', label: 'Lịch BT phòng ngừa', icon: ShieldCheck },
     { id: 'docs', label: 'Hồ sơ', icon: FolderOpen },
   ]
 
   return (
     <div className="flex flex-col max-h-[85vh]">
       {/* Header */}
-      <div className="flex items-center gap-3 px-1 py-3 border-b border-gray-100">
-        <Stethoscope className="w-5 h-5 text-primary-600 shrink-0" />
+      <div className="flex items-center gap-3 px-1 py-3 border-b border-white/[0.1]">
+        <Stethoscope className="w-5 h-5 text-amber shrink-0" />
         <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-gray-900 truncate">{device.name}</h3>
-          <p className="text-xs text-gray-400 font-mono">{device.serial}</p>
+          <h3 className="font-semibold text-gray-100 truncate">{device.name}</h3>
+          <p className="text-xs text-t3 font-mono">{device.serial}</p>
         </div>
         <span className={`${DEVICE_STATUS_COLORS[device.status] ?? 'badge-gray'}`}>
           {DEVICE_STATUS_LABELS[device.status] ?? device.status}
@@ -176,15 +185,15 @@ function DeviceDetailModal({ device }: { device: MedicalDevice | null }) {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-100 mt-2">
+      <div className="flex border-b border-white/[0.07] mt-2">
         {tabs.map((t) => (
           <button
             key={t.id}
             onClick={() => setDetailTab(t.id)}
             className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors border-b-2 ${
               detailTab === t.id
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-400 hover:text-gray-600'
+                ? 'border-amber text-amber'
+                : 'border-transparent text-t3 hover:text-gray-200'
             }`}
           >
             <t.icon className="w-3.5 h-3.5" />
@@ -197,11 +206,12 @@ function DeviceDetailModal({ device }: { device: MedicalDevice | null }) {
       <div className="flex-1 overflow-y-auto py-3">
         {detailTab === 'info' && <InfoTab device={device} />}
         {detailTab === 'history' && <HistoryTab records={history} loading={loadingHistory} deviceId={device.id} />}
+        {detailTab === 'pm' && <PmScheduleTab pmSchedules={pmSchedules} onCreate={() => setShowPmForm(true)} />}
         {detailTab === 'docs' && <DocsTab device={device} />}
       </div>
 
       {/* Footer */}
-      <div className="flex gap-2 pt-3 border-t border-gray-100 mt-2">
+      <div className="flex gap-2 pt-3 border-t border-white/[0.1] mt-2">
         <button className="btn-secondary flex-1 text-sm">
           <WrenchIcon className="w-4 h-4" /> Tạo Work Order BT
         </button>
@@ -212,6 +222,19 @@ function DeviceDetailModal({ device }: { device: MedicalDevice | null }) {
           <FileText className="w-4 h-4" /> Xuất PDF
         </button>
       </div>
+
+      <PmScheduleFormModal
+        open={showPmForm}
+        onClose={() => setShowPmForm(false)}
+        defaultAsset={{
+          id: device.id,
+          name: device.name,
+          code: device.serial,
+          location: device.location,
+          department: device.dept,
+          assetType: 'device',
+        }}
+      />
     </div>
   )
 }
@@ -226,7 +249,7 @@ function InfoTab({ device }: { device: MedicalDevice }) {
     try {
       const days = differenceInDays(ts.toDate(), new Date())
       return (
-        <span className={days < 0 ? 'text-red-600 font-medium' : 'text-gray-900'}>
+        <span className={days < 0 ? 'text-red-400 font-medium' : 'text-gray-200'}>
           {label}: {fmt(ts)} {days < 0 ? `(quá hạn ${Math.abs(days)} ngày)` : `(còn ${days} ngày)`}
         </span>
       )
@@ -250,8 +273,8 @@ function InfoTab({ device }: { device: MedicalDevice }) {
           <Field label="Hiệu chuẩn">{fmtDays(device.nextCalibration, 'Hiệu chuẩn')}</Field>
         )}
       </div>
-      <div className="pt-2 border-t border-gray-100">
-        <p className="text-xs text-gray-400">ID: {device.id}</p>
+      <div className="pt-2 border-t border-white/[0.07]">
+        <p className="text-xs text-t3">ID: {device.id}</p>
       </div>
     </div>
   )
@@ -260,8 +283,8 @@ function InfoTab({ device }: { device: MedicalDevice }) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <p className="text-xs text-gray-400">{label}</p>
-      <p className="font-medium text-gray-900">{children ?? <span className="text-gray-300">—</span>}</p>
+      <p className="text-xs text-t3">{label}</p>
+      <p className="font-medium text-gray-200">{children ?? <span className="text-gray-500">—</span>}</p>
     </div>
   )
 }
@@ -315,29 +338,29 @@ function HistoryTab({ records, loading, deviceId }: { records: (ServiceRecord & 
       ) : (
         <div className="relative pl-4 space-y-4">
           {/* Timeline line */}
-          <div className="absolute left-1.5 top-2 bottom-2 w-px bg-gray-200" />
+          <div className="absolute left-1.5 top-2 bottom-2 w-px bg-white/[0.1]" />
           {records.map((r) => (
             <div key={r.id} className="relative">
-              <div className={`absolute -left-3.5 top-1 w-2 h-2 rounded-full border-2 bg-white ${
+              <div className={`absolute -left-3.5 top-1 w-2 h-2 rounded-full border-2 border-white/10 bg-ink-2 ${
                 r.type === 'completed' ? 'border-green-500' :
                 r.type === 'repair' ? 'border-amber-500' :
-                r.type === 'calibration' ? 'border-blue-500' : 'border-gray-400'
+                r.type === 'calibration' ? 'border-blue-500' : 'border-gray-500'
               }`} />
               <div className="ml-3">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-medium text-gray-900">{SCHEDULE_TYPE_LABELS[r.type] ?? r.type}</span>
+                  <span className="text-xs font-medium text-gray-200">{SCHEDULE_TYPE_LABELS[r.type] ?? r.type}</span>
                   {r.date && (
-                    <span className="text-xs text-gray-400">
+                    <span className="text-xs text-t3">
                       {(() => { try { return format(r.date.toDate(), 'dd/MM/yyyy') } catch { return '' } })()}
                     </span>
                   )}
                   {r.cost != null && r.cost > 0 && (
-                    <span className="text-xs text-gray-400">{r.cost.toLocaleString('vi-VN')} đ</span>
+                    <span className="text-xs text-t3">{r.cost.toLocaleString('vi-VN')} đ</span>
                   )}
                 </div>
-                <p className="text-sm text-gray-700 mt-0.5">{r.description}</p>
-                {r.technician && <p className="text-xs text-gray-400">Kỹ thuật: {r.technician}</p>}
-                {r.notes && <p className="text-xs text-gray-400 italic">{r.notes}</p>}
+                <p className="text-sm text-gray-300 mt-0.5">{r.description}</p>
+                {r.technician && <p className="text-xs text-t3">Kỹ thuật: {r.technician}</p>}
+                {r.notes && <p className="text-xs text-t3 italic">{r.notes}</p>}
               </div>
             </div>
           ))}
@@ -347,12 +370,12 @@ function HistoryTab({ records, loading, deviceId }: { records: (ServiceRecord & 
       <Modal open={showAdd} onClose={() => { setShowAdd(false); reset() }} title="Thêm lịch sử bảo trì" size="md">
         <form onSubmit={handleSubmit(onAdd)} className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Ngày *</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Ngày *</label>
             <input type="date" {...register('date')} className="input-field" />
             {errors.date && <p className="text-red-500 text-xs mt-1">{errors.date.message}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Loại *</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Loại *</label>
             <select {...register('type')} className="input-field">
               <option value="">— Chọn loại —</option>
               <option value="preventive">Bảo trì định kỳ</option>
@@ -363,22 +386,22 @@ function HistoryTab({ records, loading, deviceId }: { records: (ServiceRecord & 
             {errors.type && <p className="text-red-500 text-xs mt-1">{errors.type.message}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Mô tả *</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Mô tả *</label>
             <textarea {...register('description')} className="input-field" rows={2} />
             {errors.description && <p className="text-red-500 text-xs mt-1">{errors.description.message}</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Kỹ thuật viên</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Kỹ thuật viên</label>
               <input {...register('technician')} className="input-field" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Chi phí (đ)</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Chi phí (đ)</label>
               <input type="number" {...register('cost')} className="input-field" />
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Ghi chú</label>
             <textarea {...register('notes')} className="input-field" rows={2} />
           </div>
           <button type="submit" disabled={isSubmitting} className="btn-primary w-full">
@@ -395,8 +418,8 @@ function DocsTab({ device }: { device: MedicalDevice }) {
   if (docs.length === 0) {
     return (
       <div className="text-center py-8">
-        <FileText className="w-8 h-8 mx-auto text-gray-300 mb-2" />
-        <p className="text-sm text-gray-400">Chưa có hồ sơ đính kèm</p>
+        <FileText className="w-8 h-8 mx-auto text-gray-600 mb-2" />
+        <p className="text-sm text-t3">Chưa có hồ sơ đính kèm</p>
       </div>
     )
   }
@@ -408,12 +431,89 @@ function DocsTab({ device }: { device: MedicalDevice }) {
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-2 p-2 rounded-lg border border-gray-100 hover:bg-gray-50 transition-colors"
+          className="flex items-center gap-2 p-2 rounded-lg border border-white/[0.07] hover:bg-white/[0.06] transition-colors"
         >
-          <FileText className="w-4 h-4 text-gray-400" />
-          <span className="text-sm text-primary-600 underline truncate">{url.split('/').pop() ?? url}</span>
+          <FileText className="w-4 h-4 text-t3" />
+          <span className="text-sm text-amber underline truncate">{url.split('/').pop() ?? url}</span>
         </a>
       ))}
+    </div>
+  )
+}
+
+function PmScheduleTab({
+  pmSchedules,
+  onCreate,
+}: {
+  pmSchedules: (PMSchedule & { id: string })[]
+  onCreate: () => void
+}) {
+  const now = new Date()
+  const fmt = (ts: { toDate: () => Date } | undefined) => {
+    if (!ts) return '—'
+    try { return format(ts.toDate(), 'dd/MM/yyyy') } catch { return '—' }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <button onClick={onCreate} className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1">
+          <Plus className="w-3.5 h-3.5" /> Tạo lịch BT
+        </button>
+      </div>
+
+      {pmSchedules.length === 0 ? (
+        <div className="text-center py-8">
+          <ShieldCheck className="w-8 h-8 mx-auto text-gray-600 mb-2" />
+          <p className="text-sm text-t3">Chưa có lịch BT phòng ngừa</p>
+          <p className="text-xs text-gray-600 mt-1">Tạo lịch để thiết bị được bảo trì định kỳ tự động</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {pmSchedules.map((sched) => {
+            const isOverdue = sched.nextDueDate && sched.nextDueDate.toDate() < now
+            return (
+              <div
+                key={sched.id}
+                className={`p-3 rounded-xl border ${
+                  isOverdue ? 'border-red-500/30 bg-red-500/5' : 'border-white/[0.07] bg-white/[0.03]'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-200">{sched.name}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className={`badge ${sched.isActive ? 'badge-success' : 'badge-gray'} text-xs`}>
+                        {sched.isActive ? 'Hoạt động' : 'Tạm dừng'}
+                      </span>
+                      <span className="text-xs text-t3">
+                        {sched.frequency.type === 'monthly' ? 'Hàng tháng'
+                          : sched.frequency.type === 'quarterly' ? 'Hàng quý'
+                          : sched.frequency.type === 'biannual' ? 'Nửa năm'
+                          : 'Hàng năm'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className={`text-xs font-medium ${isOverdue ? 'text-red-400' : 'text-gray-300'}`}>
+                      {fmt(sched.nextDueDate)}
+                    </p>
+                    {isOverdue && (
+                      <span className="text-[10px] text-red-400">Quá hạn</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 mt-2">
+                  <Calendar className="w-3 h-3 text-gray-600" />
+                  <span className="text-xs text-gray-500">
+                    {sched.tasks.length} hạng mục · ~{sched.estimatedDuration} phút
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -453,7 +553,7 @@ function DeviceRegistry({ devices }: { devices: MedicalDevice[] }) {
       {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-40">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-t3" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -501,25 +601,25 @@ function DeviceRegistry({ devices }: { devices: MedicalDevice[] }) {
               <button
                 key={d.id}
                 onClick={() => setSelected(d)}
-                className={`card text-left border-t-2 ${borderColors[d.status] ?? 'border-t-gray-300'} hover:shadow-md transition-shadow cursor-pointer`}
+                className={`card text-left border-t-2 ${borderColors[d.status] ?? 'border-t-gray-300'} hover:bg-white/[0.06] transition-colors cursor-pointer`}
               >
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <span className={`${DEVICE_STATUS_COLORS[d.status] ?? 'badge-gray'}`}>
                     {DEVICE_STATUS_LABELS[d.status] ?? d.status}
                   </span>
                   {overdue && (
-                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+                    <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
                   )}
                 </div>
-                <h3 className="font-medium text-sm text-gray-900 mb-1 line-clamp-1">{d.name}</h3>
-                <p className="text-xs text-gray-500 mb-2">{d.location}</p>
+                <h3 className="font-medium text-sm text-gray-200 mb-1 line-clamp-1">{d.name}</h3>
+                <p className="text-xs text-t2 mb-2">{d.location}</p>
                 {d.brand && (
-                  <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 mb-2">
+                  <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-white/[0.08] text-t2 mb-2">
                     {d.brand}
                   </span>
                 )}
                 {d.nextService && (
-                  <p className={`text-[11px] ${overdue ? 'text-red-600 font-medium' : 'text-gray-400'}`}>
+                  <p className={`text-[11px] ${overdue ? 'text-red-400 font-medium' : 'text-t3'}`}>
                     <Clock className="w-3 h-3 inline mr-0.5" />
                     {(() => {
                       try {
@@ -587,7 +687,7 @@ function MaintenanceScheduleTab({ schedule }: { schedule: (MaintenanceSchedule &
               key={f.value}
               onClick={() => setFilter(f.value)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                filter === f.value ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                filter === f.value ? 'bg-amber text-ink font-semibold' : 'bg-white/[0.06] text-t2 hover:bg-white/[0.1]'
               }`}
             >
               {f.label}
@@ -601,20 +701,20 @@ function MaintenanceScheduleTab({ schedule }: { schedule: (MaintenanceSchedule &
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="table-desktop">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="text-left px-4 py-3 font-medium text-gray-500">Thiết bị</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500 hidden md:table-cell">Loại BT</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500">Ngày lên lịch</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500 hidden lg:table-cell">Nhân viên</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500">Trạng thái</th>
+              <tr>
+                <th className="text-left">Thiết bị</th>
+                <th className="text-left hidden md:table-cell">Loại BT</th>
+                <th className="text-left">Ngày lên lịch</th>
+                <th className="text-left hidden lg:table-cell">Nhân viên</th>
+                <th className="text-left">Trạng thái</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">Không có lịch nào</td>
+                  <td colSpan={5} className="px-4 py-8 text-center text-sm text-t3">Không có lịch nào</td>
                 </tr>
               ) : (
                 filtered.map((s) => {
@@ -627,23 +727,23 @@ function MaintenanceScheduleTab({ schedule }: { schedule: (MaintenanceSchedule &
                   return (
                     <tr
                       key={s.id}
-                      className={`hover:bg-gray-50 transition-colors ${isOverdue ? 'bg-red-50/50' : ''}`}
+                      className={`hover:bg-white/[0.03] transition-colors ${isOverdue ? 'bg-red-500/5' : ''}`}
                     >
                       <td className="px-4 py-3">
-                        <p className="font-medium text-gray-900">{s.deviceName}</p>
-                        {s.notes && <p className="text-xs text-gray-400 mt-0.5 truncate max-w-32">{s.notes}</p>}
+                        <p className="font-medium text-gray-200">{s.deviceName}</p>
+                        {s.notes && <p className="text-xs text-t3 mt-0.5 truncate max-w-32">{s.notes}</p>}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell">
                         <span className="badge-info">{SCHEDULE_TYPE_LABELS[s.type] ?? s.type}</span>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={isOverdue ? 'text-red-600 font-medium' : 'text-gray-700'}>
+                        <span className={isOverdue ? 'text-red-400 font-medium' : 'text-gray-200'}>
                           {(() => {
                             try { return format(s.scheduledDate.toDate(), 'dd/MM/yyyy') } catch { return '—' }
                           })()}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-600 hidden lg:table-cell">{s.assignedTo ?? '—'}</td>
+                      <td className="px-4 py-3 text-gray-400 hidden lg:table-cell">{s.assignedTo ?? '—'}</td>
                       <td className="px-4 py-3">
                         <span className={SCHEDULE_STATUS_COLORS[s.status] ?? 'badge-gray'}>
                           {s.status === 'scheduled' ? 'Đã lên lịch' :
@@ -675,20 +775,20 @@ function CalibrationTracker({ devices }: { devices: MedicalDevice[] }) {
   return (
     <div className="card overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="table-desktop">
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-100">
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Thiết bị</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500 hidden md:table-cell">Model</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500 hidden lg:table-cell">Vị trí</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Ngày hiệu chuẩn</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Cảnh báo</th>
+            <tr>
+              <th className="text-left">Thiết bị</th>
+              <th className="text-left hidden md:table-cell">Model</th>
+              <th className="text-left hidden lg:table-cell">Vị trí</th>
+              <th className="text-left">Ngày hiệu chuẩn</th>
+              <th className="text-left">Cảnh báo</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-50">
+          <tbody>
             {calibrated.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">
+                <td colSpan={5} className="px-4 py-8 text-center text-sm text-t3">
                   Không có thiết bị cần hiệu chuẩn
                 </td>
               </tr>
@@ -699,22 +799,22 @@ function CalibrationTracker({ devices }: { devices: MedicalDevice[] }) {
                 const isDueSoon = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30
 
                 return (
-                  <tr key={d.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={d.id} className="hover:bg-white/[0.03] transition-colors">
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900">{d.name}</p>
-                      <p className="text-xs text-gray-400 font-mono">{d.serial}</p>
+                      <p className="font-medium text-gray-200">{d.name}</p>
+                      <p className="text-xs text-t3 font-mono">{d.serial}</p>
                     </td>
-                    <td className="px-4 py-3 text-gray-600 hidden md:table-cell">{d.model}</td>
-                    <td className="px-4 py-3 text-gray-600 hidden lg:table-cell">{d.location}</td>
+                    <td className="px-4 py-3 text-gray-400 hidden md:table-cell">{d.model}</td>
+                    <td className="px-4 py-3 text-gray-400 hidden lg:table-cell">{d.location}</td>
                     <td className="px-4 py-3">
                       {d.nextCalibration ? (
-                        <span className={isOverdue ? 'text-red-600 font-medium' : 'text-gray-700'}>
+                        <span className={isOverdue ? 'text-red-400 font-medium' : 'text-gray-200'}>
                           {(() => {
                             try { return format(d.nextCalibration.toDate(), 'dd/MM/yyyy') } catch { return '—' }
                           })()}
                         </span>
                       ) : (
-                        <span className="text-gray-400">—</span>
+                        <span className="text-t3">—</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -774,7 +874,7 @@ export default function MedicalDevicesPage() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <div className="h-8 w-64"><div className="card h-full animate-pulse bg-gray-100" /></div>
+        <div className="h-8 w-64"><div className="card h-full animate-pulse bg-white/[0.06]" /></div>
         <TableSkeleton rows={8} />
       </div>
     )
@@ -783,8 +883,8 @@ export default function MedicalDevicesPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-bold text-gray-900">Thiết bị Y tế</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-lg font-bold text-gray-100">Thiết bị Y tế</h1>
+        <p className="text-sm text-t2">
           Quản lý thiết bị · {devices.length} thiết bị · {schedule.filter((s) => {
             try { return isBefore(s.scheduledDate.toDate(), new Date()) && s.status !== 'completed' } catch { return false }
           }).length} quá hạn
@@ -792,7 +892,7 @@ export default function MedicalDevicesPage() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex border-b border-gray-200">
+      <div className="flex gap-1 bg-white/[0.03] rounded-xl p-1 w-fit">
         {([
           { id: 'devices' as DeviceTab, label: 'Thiết bị', icon: Stethoscope },
           { id: 'schedule' as DeviceTab, label: 'Lịch bảo trì', icon: Calendar },
@@ -801,10 +901,10 @@ export default function MedicalDevicesPage() {
           <button
             key={t.id}
             onClick={() => setActiveTab(t.id)}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors rounded-lg ${
               activeTab === t.id
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+                ? 'bg-amber text-ink font-semibold'
+                : 'text-t2 hover:text-gray-200'
             }`}
           >
             <t.icon className="w-4 h-4" />
@@ -812,7 +912,7 @@ export default function MedicalDevicesPage() {
             {t.id === 'schedule' && schedule.filter((s) => {
               try { return isBefore(s.scheduledDate.toDate(), new Date()) && s.status !== 'completed' } catch { return false }
             }).length > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 text-[10px] font-bold">
+              <span className="ml-1 px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 text-[10px] font-bold">
                 {schedule.filter((s) => {
                   try { return isBefore(s.scheduledDate.toDate(), new Date()) && s.status !== 'completed' } catch { return false }
                 }).length}

@@ -10,6 +10,8 @@ import { ToastContainer } from '@/components/ui/Toast'
 import { Loader2 } from 'lucide-react'
 
 const DashboardPage = lazy(() => import('@/modules/dashboard/DashboardPage'))
+const AdminUsersPage = lazy(() => import('@/modules/admin/AdminUsersPage'))
+const AdminNotificationsPage = lazy(() => import('@/modules/admin/AdminNotificationsPage'))
 const OrgPage = lazy(() => import('@/modules/org/OrgPage'))
 const InfraPage = lazy(() => import('@/modules/infra/InfraPage'))
 const MaintenancePage = lazy(() => import('@/modules/maintenance/MaintenancePage'))
@@ -175,6 +177,26 @@ export default function App() {
                 element={
                   <Suspense fallback={<PageFallback />}>
                     <ReportsPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/admin/users"
+                element={
+                  <Suspense fallback={<PageFallback />}>
+                    <AuthGuard requiredRole="admin">
+                      <AdminUsersPage />
+                    </AuthGuard>
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/admin/notifications"
+                element={
+                  <Suspense fallback={<PageFallback />}>
+                    <AuthGuard requiredRole="admin">
+                      <AdminNotificationsPage />
+                    </AuthGuard>
                   </Suspense>
                 }
               />

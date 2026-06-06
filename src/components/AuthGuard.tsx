@@ -1,12 +1,14 @@
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { Loader2 } from 'lucide-react'
+import { toast } from '@/components/ui/Toast'
 
 interface AuthGuardProps {
   children: React.ReactNode
+  requiredRole?: string
 }
 
-export default function AuthGuard({ children }: AuthGuardProps) {
+export default function AuthGuard({ children, requiredRole }: AuthGuardProps) {
   const { user, loading } = useAuth()
   const location = useLocation()
 
@@ -23,6 +25,11 @@ export default function AuthGuard({ children }: AuthGuardProps) {
 
   if (!user) {
     return <Navigate to="/login" state={{ from: location }} replace />
+  }
+
+  if (requiredRole && user.role !== requiredRole) {
+    toast.error('Không có quyền truy cập')
+    return <Navigate to="/" replace />
   }
 
   return <>{children}</>

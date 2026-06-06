@@ -1,0 +1,167 @@
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  getDocs,
+  addDoc,
+  Timestamp,
+  type QuerySnapshot,
+  type DocumentData,
+} from 'firebase/firestore'
+import { db } from '@/firebase/config'
+
+export interface BatchInfo {
+  batchNumber: string
+  importDate: Timestamp
+  expiryDate: Timestamp | null
+  quantity: number
+  daysRemaining: number
+  alertLevel: 'notice' | 'warning' | 'critical' | null
+}
+
+export interface FIFOWarning {
+  type: 'fifo_violation'
+  message: string
+  oldestBatch: BatchInfo
+  selectedBatch: string
+}
+
+export interface FIFOValidation {
+  valid: boolean
+  warning: FIFOWarning | null
+}
+
+export function computeDaysRemaining(expiryDate: Timestamp): number {
+  return Math.floor((expiryDate.toMillis() - Date.now()) / 86400000)
+}
+
+export function getAlertLevel(
+  days: number,
+): 'notice' | 'warning' | 'critical' | null {
+  if (days > 180) return null
+  if (days > 90) return 'notice'
+  if (days > 30) return 'warning'
+  return 'critical'
+}
+
+function docToBatch(doc: QuerySnapshot<DocumentData>['docs'][number]): BatchInfo {
+  const d = doc.data()
+  const expiryDate: Timestamp | null = d.expiryDate ?? null
+  const daysRemaining =
+    expiryDate !== null ? computeDaysRemaining(expiryDate) : 9999
+  return {
+    batchNumber: d.batchNumber ?? '—',
+    importDate: d.importDate ?? Timestamp.now(),
+    expiryDate,
+    quantity: d.quantity ?? 0,
+    daysRemaining,
+    alertLevel: expiryDate !== null ? getAlertLevel(daysRemaining) : null,
+  }
+}
+
+export async function getBatchesFIFO(itemId: string): Promise<BatchInfo[]> {
+  const q = query(
+    collection(db, 'inventoryTransactions'),
+    where('itemId', '==', itemId),
+    where('type', '==', 'import'),
+    orderBy('importDate', 'asc'),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map(docToBatch).filter((b) => b.quantity > 0)
+}
+
+export async function getBatchesFEFO(itemId: string): Promise<BatchInfo[]> {
+  const q = query(
+    collection(db, 'inventoryTransactions'),
+    where('itemId', '==', itemId),
+    where('type', '==', 'import'),
+    orderBy('expiryDate', 'asc'),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map(docToBatch).filter((b) => b.quantity > 0)
+}
+
+function formatDate(ts: Timestamp): string {
+  return ts.toDate().toLocaleDateString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  })
+}
+
+export async function validateFIFOExport(
+  itemId: string,
+  selectedBatch: string,
+  _qty: number,
+): Promise<FIFOValidation> {
+  const batches = await getBatchesFIFO(itemId)
+  const oldest = batches[0]
+
+  if (!oldest) return { valid: true, warning: null }
+  if (oldest.batchNumber === selectedBatch)
+    return { valid: true, warning: null }
+
+  return {
+    valid: false,
+    warning: {
+      type: 'fifo_violation',
+      message: `Lô ${selectedBatch} không phải lô cũ nhất.\nLô nhập trước: ${oldest.batchNumber}\n(nhập ${formatDate(oldest.importDate)}).\nXuất theo FIFO để tránh hàng tồn lâu.`,
+      oldestBatch: oldest,
+      selectedBatch,
+    },
+  }
+}
+
+export async function scanAndCreateExpiryAlerts(): Promise<number> {
+  const now = Date.now()
+  const cutoff180 = Timestamp.fromMillis(now + 180 * 86400000)
+
+  const snap = await getDocs(
+    query(
+      collection(db, 'inventory'),
+      where('expiryDate', '<=', cutoff180),
+      where('expiryDate', '!=', null),
+    ),
+  )
+
+  let created = 0
+  for (const docSnap of snap.docs) {
+    const item = { id: docSnap.id, ...docSnap.data() } as {
+      id: string
+      name: string
+      expiryDate: Timestamp
+      batchNumber?: string
+    }
+    if (!item.expiryDate) continue
+
+    const days = computeDaysRemaining(item.expiryDate)
+    const level = getAlertLevel(days)
+    if (!level) continue
+
+    const existing = await getDocs(
+      query(
+        collection(db, 'expiryAlerts'),
+        where('itemId', '==', item.id),
+        where('isRead', '==', false),
+        where('alertLevel', '==', level),
+        where('resolvedAt', '==', null),
+      ),
+    )
+    if (!existing.empty) continue
+
+    await addDoc(collection(db, 'expiryAlerts'), {
+      itemId: item.id,
+      itemName: item.name,
+      batchNumber: item.batchNumber ?? '—',
+      expiryDate: item.expiryDate,
+      daysRemaining: days,
+      alertLevel: level,
+      isRead: false,
+      createdAt: Timestamp.now(),
+      resolvedAt: null,
+    })
+    created++
+  }
+  return created
+}

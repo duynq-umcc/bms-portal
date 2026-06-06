@@ -5,7 +5,7 @@
 export type { FirestoreUser as UserProfile, FirestoreUser as StaffMember } from '../types/firestore'
 export type { WorkOrder, WorkOrderStatus, WorkOrderPriority, WorkOrderCategory } from '../types/firestore'
 export type { Device as MedicalDevice, ServiceRecord, MaintenanceSchedule } from '../types/firestore'
-export type { InventoryItem as WarehouseItem, InventoryItem, InventoryTransaction } from '../types/firestore'
+export type { InventoryItem as WarehouseItem, InventoryItem, InventoryTransaction, ExpiryAlert, ExpiryAlertLevel, LegalDocs, LegalDocsStatus, ImportedDoc, ImportedInvoiceDoc, ImportedCustomsDoc, ImportDocAudit } from '../types/firestore'
 export type { InfraSystem, InfraType, InfraStatus } from '../types/firestore'
 export type { Incident, IncidentSeverity, IncidentStatus, IncidentType } from '../types/firestore'
 export type { Vendor, Contract, VendorType } from '../types/firestore'
@@ -16,7 +16,20 @@ export type { ComplianceRecord, ComplianceType, ComplianceStatus } from '../type
 export type { EnvironmentLog } from '../types/firestore'
 export type { Report, KPIData, CostData } from '../types/firestore'
 export type { Department, UserRole, DeviceStatus, ReadingStatus } from '../types/firestore'
-export type { SeedMeta } from '../types/firestore'
+export type { SeedMeta, NotificationItem, AlertRule, AlertLog, AlertTrigger, AlertCondition } from '../types/firestore'
+export type {
+  OperationLog,
+  OperationLogShift,
+  OperationLogStatus,
+  OperationLogElectricity,
+  OperationLogWater,
+  OperationLogHvac,
+  OperationLogMedicalGas,
+  OperationLogHandover,
+  OperationLogChecklist,
+  GeneratorStatus,
+  MedicalGasStatus,
+} from '../types/firestore'
 export type {
   FireDrill,
   PeriodicInspection,

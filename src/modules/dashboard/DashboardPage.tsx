@@ -5,8 +5,14 @@ import {
   listenIncidents,
   listenInventory,
   listenDevices,
+  listenPmWorkOrders,
+  listenDisposalRequests,
 } from '@/firebase/db'
+import { collection, query, where, getDocs } from 'firebase/firestore'
+import { db } from '@/firebase/config'
+import { Timestamp } from 'firebase/firestore'
 import type { InfraSystem, WorkOrder, Incident, WarehouseItem, MedicalDevice } from '@/firebase/types'
+import type { PMWorkOrder, DisposalRequest } from '@/types/firestore'
 import {
   Zap,
   Droplets,
@@ -18,8 +24,11 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
+  ShieldCheck,
+  TrendingDown,
 } from 'lucide-react'
 import { EmptyState } from '@/components/ui/Table'
+import { startOfMonth, endOfMonth } from 'date-fns'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -131,9 +140,12 @@ export default function DashboardPage() {
   const [incidents, setIncidents] = useState<(Incident & { id: string })[]>([])
   const [inventory, setInventory] = useState<(WarehouseItem & { id: string })[]>([])
   const [devices, setDevices] = useState<(MedicalDevice & { id: string })[]>([])
+  const [pmWorkOrders, setPmWorkOrders] = useState<(PMWorkOrder & { id: string })[]>([])
+  const [disposalRequests, setDisposalRequests] = useState<(DisposalRequest & { id: string })[]>([])
 
   const [hasFirstLoad, setHasFirstLoad] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [complianceValue, setComplianceValue] = useState<number>(0)
 
   useEffect(() => {
     let errMsg: string | null = null
@@ -143,6 +155,8 @@ export default function DashboardPage() {
       listenIncidents(setIncidents),
       listenInventory(setInventory),
       listenDevices(setDevices),
+      listenPmWorkOrders(setPmWorkOrders as (docs: (PMWorkOrder & { id: string })[]) => void),
+      listenDisposalRequests(setDisposalRequests as (docs: (DisposalRequest & { id: string })[]) => void),
     ]
 
     const timer = setTimeout(() => {
@@ -154,6 +168,35 @@ export default function DashboardPage() {
       unsubs.forEach((u) => u())
       clearTimeout(timer)
     }
+  }, [])
+
+  useEffect(() => {
+    const fetchCompliance = async () => {
+      try {
+        const devicesSnap = await getDocs(
+          query(collection(db, 'devices'), where('status', '==', 'operational'))
+        )
+        const total = devicesSnap.size
+        if (total === 0) { setComplianceValue(100); return }
+
+        const now = Timestamp.now()
+        const overdueSnap = await getDocs(
+          query(collection(db, 'devices'),
+            where('status', '==', 'operational'),
+            where('nextService', '<', now))
+        )
+        const overdue = overdueSnap.size
+        const compliance = Math.round(((total - overdue) / total) * 100)
+        setComplianceValue(compliance)
+      } catch {
+        const complianceSnap = await getDocs(collection(db, 'compliance'))
+        const total = complianceSnap.size
+        if (total === 0) { setComplianceValue(100); return }
+        const compliant = complianceSnap.docs.filter((d) => d.data().status === 'compliant').length
+        setComplianceValue(Math.round((compliant / total) * 100))
+      }
+    }
+    fetchCompliance()
   }, [])
 
   // Aggregate metrics
@@ -169,12 +212,38 @@ export default function DashboardPage() {
   const latestIncidents = incidents.slice(0, 5)
   const recentWorkOrders = workOrders.slice(0, 5)
 
+  // PM metrics
+  const overduePmWos = pmWorkOrders.filter((wo) => wo.status === 'overdue').length
+  const now = new Date()
+  const upcomingPmWos = pmWorkOrders.filter((wo) => {
+    if (!wo.dueDate || wo.status === 'completed' || wo.status === 'cancelled') return false
+    const days = Math.floor((wo.dueDate.toDate().getTime() - now.getTime()) / 86_400_000)
+    return days >= 0 && days <= 7
+  }).length
+
+  // Disposal metrics (P2.2)
+  const approvedDisposals = disposalRequests.filter((r) => r.status === 'approved').length
+  const pendingReview = disposalRequests.filter((r) => r.status === 'pending_review').length
+
+  // PM compliance for current month
+  const monthStart = startOfMonth(now)
+  const monthEnd = endOfMonth(now)
+  const thisMonthPmWos = pmWorkOrders.filter((wo) => {
+    if (!wo.dueDate) return false
+    const d = wo.dueDate.toDate()
+    return d >= monthStart && d <= monthEnd
+  })
+  const completedPm = thisMonthPmWos.filter((wo) => wo.status === 'completed').length
+  const overduePm = thisMonthPmWos.filter((wo) => wo.status === 'overdue').length
+  const pmCompliance = thisMonthPmWos.length > 0
+    ? Math.round((completedPm / (completedPm + overduePm || 1)) * 100)
+    : 100
+
   // KPI aggregate values derived from live data
   const uptimeValue = deviceUptime
   const woCompletionValue = workOrders.length > 0
     ? Math.round((workOrders.filter((w) => w.status === 'completed').length / workOrders.length) * 100)
     : 0
-  const complianceValue = 92 // no compliance listener wired yet
   const safetyValue = incidents.length > 0
     ? Math.max(0, Math.round(((incidents.length - criticalIncidents) / incidents.length) * 100))
     : 100
@@ -195,8 +264,8 @@ export default function DashboardPage() {
           <div className="skeleton-line h-3 w-48 mt-2" />
         </div>
         {/* row 1: 6 stat cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          {[...Array(6)].map((_, i) => <SkeletonCard key={i} />)}
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+          {[...Array(8)].map((_, i) => <SkeletonCard key={i} />)}
         </div>
         {/* row 2 */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -282,8 +351,8 @@ export default function DashboardPage() {
         <p className="text-sm text-gray-500">Bệnh viện BMS — {today}</p>
       </div>
 
-      {/* ─── ROW 1: 6 stat cards ─── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      {/* ─── ROW 1: 8 stat cards ─── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
         <StatCard
           icon={Zap}
           label="Điện hôm nay"
@@ -332,11 +401,28 @@ export default function DashboardPage() {
           colorClass={criticalIncidents > 0 ? 'text-red-400' : 'text-gray-400'}
           iconBgClass={criticalIncidents > 0 ? 'bg-red-500' : 'bg-gray-600'}
         />
+        <StatCard
+          icon={ShieldCheck}
+          label="BT phòng ngừa"
+          value={overduePmWos}
+          sub={`${upcomingPmWos} sắp đến hạn`}
+          colorClass={overduePmWos > 0 ? 'text-red-400' : upcomingPmWos > 0 ? 'text-amber' : 'text-green-400'}
+          iconBgClass={overduePmWos > 0 ? 'bg-red-500' : upcomingPmWos > 0 ? 'bg-amber-500' : 'bg-green-600'}
+        />
+        <StatCard
+          icon={TrendingDown}
+          label="Chờ thanh lý"
+          value={approvedDisposals}
+          sub={`${pendingReview} chờ xem xét`}
+          colorClass={approvedDisposals > 0 ? 'text-amber' : 'text-gray-400'}
+          iconBgClass={approvedDisposals > 0 ? 'bg-amber-500' : 'bg-gray-600'}
+        />
       </div>
 
       {/* ─── ROW 2 ─── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* LEFT: System status grid */}
+        <div className="lg:col-span-2">
         <div className="card">
           <div className="card-header">
             <h3 className="font-semibold text-gray-200 flex items-center gap-2">
@@ -381,6 +467,7 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+        </div>
         </div>
 
         {/* RIGHT: Incidents timeline */}
@@ -428,7 +515,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ─── ROW 3 ─── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* LEFT: Today's work orders */}
         <div className="card">
           <div className="card-header">
@@ -478,6 +565,7 @@ export default function DashboardPage() {
               { label: 'Hoàn thành đúng hạn', actual: woCompletionValue, target: 90, color: 'bg-blue-500', trackClass: 'bg-blue-500/10' },
               { label: 'Tuân thủ', actual: complianceValue, target: 95, color: 'bg-purple-500', trackClass: 'bg-purple-500/10' },
               { label: 'An toàn', actual: safetyValue, target: 100, color: 'bg-yellow-500', trackClass: 'bg-yellow-500/10' },
+              { label: 'Hoàn thành PM tháng', actual: pmCompliance, target: 90, color: 'bg-cyan-500', trackClass: 'bg-cyan-500/10' },
             ].map((kpi) => {
               const pct = Math.min(100, kpi.actual)
               const onTrack = kpi.actual >= kpi.target * 0.9

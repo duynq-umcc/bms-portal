@@ -355,17 +355,17 @@ function WasteTab() {
 
       {/* Table */}
       <div className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="table-desktop">
           <thead>
-            <tr className="border-b border-white/[0.07]">
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Ngày</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs">Loại</th>
-              <th className="text-right px-4 py-3 font-medium text-t3 text-xs hidden sm:table-cell">Khối lượng</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden md:table-cell">Đơn vị xử lý</th>
-              <th className="text-left px-4 py-3 font-medium text-t3 text-xs hidden lg:table-cell">Chứng từ</th>
+            <tr>
+              <th className="text-left">Ngày</th>
+              <th className="text-left">Loại</th>
+              <th className="text-right hidden sm:table-cell">Khối lượng</th>
+              <th className="text-left hidden md:table-cell">Đơn vị xử lý</th>
+              <th className="text-left hidden lg:table-cell">Chứng từ</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody>
             {logs.slice(0, 20).map((l) => (
               <tr key={l.id} className="hover:bg-white/[0.03]">
                 <td className="px-4 py-3 text-gray-300 text-xs">{l.date ? format(l.date.toDate(), 'dd/MM/yyyy', { locale: vi }) : '—'}</td>

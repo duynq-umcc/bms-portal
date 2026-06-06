@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import {
   listenWorkOrders,
   listenIncidents,
+  listenPmWorkOrders,
   addWorkOrder,
   updateWorkOrder,
 } from '@/firebase/db'
@@ -16,14 +17,16 @@ import { z } from 'zod'
 import {
   Plus, Wrench, CheckCircle2, Clock, XCircle, AlertCircle,
   Calendar, ChevronLeft, ChevronRight, GripVertical,
-  X, User, MapPin, Tag, AlignLeft,
+  X, User, MapPin, Tag, AlignLeft, ShieldCheck,
 } from 'lucide-react'
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isToday, startOfWeek, addMonths, subMonths } from 'date-fns'
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isToday, startOfWeek, addMonths, subMonths, differenceInDays } from 'date-fns'
 import { vi } from 'date-fns/locale'
+import PmWorkOrderList from './PmWorkOrderList'
+import PmScheduleManager from './PmScheduleManager'
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
-type TabId = 'list' | 'calendar' | 'timeline'
+type TabId = 'list' | 'calendar' | 'timeline' | 'pm' | 'pm-schedules'
 
 const STATUS_OPTIONS: { value: WorkOrderStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'Tất cả' },
@@ -517,8 +520,10 @@ function NewWorkOrderModal({
 // ─── page ─────────────────────────────────────────────────────────────────────
 
 export default function MaintenancePage() {
+  const { user } = useAuth()
   const [workOrders, setWorkOrders] = useState<(WorkOrder & { id: string })[]>([])
   const [incidents, setIncidents] = useState<(Incident & { id: string })[]>([])
+  const [pmWorkOrders, setPmWorkOrders] = useState<({ id: string } & import('@/types/firestore').PMWorkOrder)[]>([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
   const [tab, setTab] = useState<TabId>('list')
@@ -526,11 +531,13 @@ export default function MaintenancePage() {
   const [priorityFilter, setPriorityFilter] = useState<WorkOrderPriority | 'all'>('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'incident' | 'pm'>('all')
 
   useEffect(() => {
     const unsubs = [
       listenWorkOrders(setWorkOrders),
       listenIncidents(setIncidents),
+      listenPmWorkOrders(setPmWorkOrders as (docs: ({ id: string } & import('@/types/firestore').PMWorkOrder)[]) => void),
     ]
     const timer = setTimeout(() => setLoading(false), 1200)
     return () => { unsubs.forEach((u) => u()); clearTimeout(timer) }
@@ -542,6 +549,16 @@ export default function MaintenancePage() {
     if (categoryFilter !== 'all' && wo.system?.toLowerCase() !== categoryFilter) return false
     return true
   })
+
+  // PM stats for badge
+  const now = new Date()
+  const overduePm = pmWorkOrders.filter((wo) => wo.status === 'overdue').length
+  const upcomingPm = pmWorkOrders.filter((wo) => {
+    if (!wo.dueDate) return false
+    const days = differenceInDays(wo.dueDate.toDate(), now)
+    return days >= 0 && days <= 7
+  }).length
+  const pmBadge = overduePm > 0 ? overduePm : upcomingPm > 0 ? upcomingPm : 0
 
   // Timeline merged
   const timelineItems: TimelineItem[] = [
@@ -594,6 +611,11 @@ export default function MaintenancePage() {
     { id: 'timeline', label: 'Timeline', icon: Clock },
   ]
 
+  const pmTabs: { id: TabId; label: string; icon: React.ElementType; managerOnly?: boolean }[] = [
+    { id: 'pm', label: 'Lịch BT phòng ngừa', icon: ShieldCheck },
+    { id: 'pm-schedules', label: 'Quản lý lịch BT', icon: Calendar, managerOnly: true },
+  ]
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -609,16 +631,21 @@ export default function MaintenancePage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold text-gray-100">Bảo trì</h1>
-          <p className="text-sm text-gray-500">{workOrders.length} phiếu Work Order</p>
+          <p className="text-sm text-gray-500">
+            {tab === 'pm' ? `${pmWorkOrders.length} phiếu BT phòng ngừa`
+              : `${workOrders.length} phiếu Work Order`}
+          </p>
         </div>
+        {tab !== 'pm' && tab !== 'pm-schedules' && (
         <button onClick={() => setShowNew(true)} className="btn-primary flex items-center gap-2">
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">Tạo phiếu</span>
         </button>
+        )}
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-white/[0.04] p-1 rounded-xl w-fit">
+      <div className="flex flex-wrap gap-1 bg-white/[0.04] p-1 rounded-xl w-fit">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -633,11 +660,55 @@ export default function MaintenancePage() {
             {t.label}
           </button>
         ))}
+        {/* Separator */}
+        {tabs.length > 0 && <div className="w-px bg-white/[0.1] mx-1 self-stretch" />}
+        {pmTabs.map((t) => {
+          if (t.managerOnly && !['admin', 'manager'].includes(user?.role ?? '')) return null
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                tab === t.id
+                  ? 'bg-amber text-ink font-semibold'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-white/[0.06]'
+              }`}
+            >
+              <t.icon className="w-3.5 h-3.5" />
+              {t.label}
+              {t.id === 'pm' && pmBadge > 0 && (
+                <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                  overduePm > 0 ? 'bg-red-500/20 text-red-400' : 'bg-amber/20 text-amber'
+                }`}>
+                  {pmBadge}
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
 
       {/* ── Tab 1: Danh sách ── */}
       {tab === 'list' && (
         <>
+          {/* PM summary widget */}
+          {upcomingPm > 0 && (
+            <div className="card p-3 flex items-center justify-between bg-amber/5 border border-amber/10">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber" />
+                <span className="text-sm text-gray-300">
+                  {upcomingPm} lịch BT phòng ngừa sắp đến hạn trong 7 ngày
+                </span>
+              </div>
+              <button
+                onClick={() => setTab('pm')}
+                className="text-xs text-amber hover:underline"
+              >
+                Xem tất cả →
+              </button>
+            </div>
+          )}
+
           {/* Filters */}
           <div className="flex flex-wrap gap-2">
             <select
@@ -661,9 +732,18 @@ export default function MaintenancePage() {
             >
               {CATEGORY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
-            {(statusFilter !== 'all' || priorityFilter !== 'all' || categoryFilter !== 'all') && (
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value as 'all' | 'incident' | 'pm')}
+              className="text-xs border border-white/[0.1] rounded-lg px-3 py-1.5 bg-white/[0.05] text-gray-300 cursor-pointer"
+            >
+              <option value="all">Tất cả</option>
+              <option value="incident">Sự cố</option>
+              <option value="pm">Bảo trì định kỳ</option>
+            </select>
+            {(statusFilter !== 'all' || priorityFilter !== 'all' || categoryFilter !== 'all' || sourceFilter !== 'all') && (
               <button
-                onClick={() => { setStatusFilter('all'); setPriorityFilter('all'); setCategoryFilter('all') }}
+                onClick={() => { setStatusFilter('all'); setPriorityFilter('all'); setCategoryFilter('all'); setSourceFilter('all') }}
                 className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
               >
                 <X className="w-3 h-3" />
@@ -706,18 +786,18 @@ export default function MaintenancePage() {
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="table-desktop">
                   <thead>
-                    <tr className="border-b border-white/[0.07]">
-                      <th className="text-left px-3 py-2.5 font-medium text-gray-500 text-xs">ID</th>
-                      <th className="text-left px-3 py-2.5 font-medium text-gray-500 text-xs">Tiêu đề</th>
-                      <th className="text-left px-3 py-2.5 font-medium text-gray-500 text-xs hidden md:table-cell">Vị trí</th>
-                      <th className="text-left px-3 py-2.5 font-medium text-gray-500 text-xs hidden lg:table-cell">Loại</th>
-                      <th className="text-left px-3 py-2.5 font-medium text-gray-500 text-xs">Ưu tiên</th>
-                      <th className="text-left px-3 py-2.5 font-medium text-gray-500 text-xs hidden md:table-cell">Nhân viên</th>
-                      <th className="text-left px-3 py-2.5 font-medium text-gray-500 text-xs">Trạng thái</th>
-                      <th className="text-left px-3 py-2.5 font-medium text-gray-500 text-xs hidden lg:table-cell">Ngày</th>
-                      <th className="px-3 py-2.5" />
+                    <tr>
+                      <th className="text-left">ID</th>
+                      <th className="text-left">Tiêu đề</th>
+                      <th className="text-left hidden md:table-cell">Vị trí</th>
+                      <th className="text-left hidden lg:table-cell">Loại</th>
+                      <th className="text-left">Ưu tiên</th>
+                      <th className="text-left hidden md:table-cell">Nhân viên</th>
+                      <th className="text-left">Trạng thái</th>
+                      <th className="text-left hidden lg:table-cell">Ngày</th>
+                      <th />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/[0.04]">
@@ -791,6 +871,12 @@ export default function MaintenancePage() {
         </div>
       )}
 
+      {/* ── PM Tab: Lịch BT phòng ngừa ── */}
+      {tab === 'pm' && <PmWorkOrderList />}
+
+      {/* ── PM Tab: Quản lý lịch BT ── */}
+      {tab === 'pm-schedules' && <PmScheduleManager />}
+
       {/* ── Tab 3: Timeline ── */}
       {tab === 'timeline' && (
         <div className="card p-4">
@@ -813,6 +899,7 @@ export default function MaintenancePage() {
       )}
 
       {/* FAB (mobile) */}
+      {tab !== 'pm' && tab !== 'pm-schedules' && (
       <button
         onClick={() => setShowNew(true)}
         className="fixed bottom-20 right-4 md:hidden w-14 h-14 rounded-full bg-amber text-ink shadow-lg flex items-center justify-center active:scale-95 transition-transform z-40"
@@ -820,6 +907,7 @@ export default function MaintenancePage() {
       >
         <Plus className="w-6 h-6" strokeWidth={2.5} />
       </button>
+      )}
 
       {/* New WO modal */}
       <NewWorkOrderModal open={showNew} onClose={() => setShowNew(false)} />
