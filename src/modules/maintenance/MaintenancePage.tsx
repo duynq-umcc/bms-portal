@@ -14,6 +14,7 @@ import { toast } from '@/components/ui/Toast'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { Timestamp } from 'firebase/firestore'
 import {
   Plus, Wrench, CheckCircle2, Clock, XCircle, AlertCircle,
   Calendar, ChevronLeft, ChevronRight, GripVertical,
@@ -589,7 +590,7 @@ export default function MaintenancePage() {
 
   const handleDone = async (id: string) => {
     try {
-      await updateWorkOrder(id, { status: 'completed' })
+      await updateWorkOrder(id, { status: 'completed', completedAt: Timestamp.now() })
       toast.success('Đã hoàn thành Work Order')
     } catch {
       toast.error('Cập nhật thất bại')
@@ -598,7 +599,11 @@ export default function MaintenancePage() {
 
   const handleStatusChange = async (id: string, status: WorkOrderStatus) => {
     try {
-      await updateWorkOrder(id, { status })
+      const updates: Record<string, unknown> = { status }
+      if (status === 'in_progress') {
+        updates.startedAt = Timestamp.now()
+      }
+      await updateWorkOrder(id, updates)
       toast.success(`Trạng thái: ${STATUS_LABEL[status]}`)
     } catch {
       toast.error('Cập nhật thất bại')

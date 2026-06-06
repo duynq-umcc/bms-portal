@@ -18,6 +18,202 @@ if (!admin.apps.length) {
 
 const db = admin.firestore()
 
+// ─── Period helpers ────────────────────────────────────────────────────────────
+
+function getCurrentPeriod(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+function getPrevPeriod(period: string): string {
+  const [y, m] = period.split('-').map(Number)
+  if (m === 1) return `${y - 1}-12`
+  return `${y}-${String(m - 1).padStart(2, '0')}`
+}
+
+// ─── KPI computation (Admin SDK) ──────────────────────────────────────────────
+
+async function computeTechnicianKpiAdmin(uid: string, period: string): Promise<Record<string, unknown>> {
+  const [year, month] = period.split('-').map(Number)
+  const startOfMonth = new Date(year, month - 1, 1)
+  const endOfMonth = new Date(year, month, 0, 23, 59, 59)
+  const startTs = admin.firestore.Timestamp.fromDate(startOfMonth)
+  const endTs = admin.firestore.Timestamp.fromDate(endOfMonth)
+
+  // WO Stats
+  const allWoSnap = await db.collection('workOrders')
+    .where('assignedTo', '==', uid)
+    .where('createdAt', '>=', startTs)
+    .where('createdAt', '<=', endTs)
+    .get()
+
+  const completedWoSnap = await db.collection('workOrders')
+    .where('assignedTo', '==', uid)
+    .where('status', '==', 'completed')
+    .where('completedAt', '>=', startTs)
+    .where('completedAt', '<=', endTs)
+    .get()
+
+  const pmWoSnap = await db.collection('pmWorkOrders')
+    .where('assignedTo', '==', uid)
+    .where('dueDate', '>=', startTs)
+    .where('dueDate', '<=', endTs)
+    .get()
+
+  const allWos = allWoSnap.docs.map((d) => d.data())
+  const completedWos = completedWoSnap.docs.map((d) => d.data())
+  const pmWos = pmWoSnap.docs.map((d) => d.data())
+
+  const completedOnTime = completedWos.filter((wo) => {
+    if (!wo.dueDate || !wo.completedAt) return false
+    return wo.completedAt.toMillis() <= wo.dueDate.toMillis()
+  }).length
+
+  const completionHours = completedWos
+    .filter((wo) => wo.completedAt && wo.createdAt)
+    .map((wo) => (wo.completedAt.toMillis() - wo.createdAt.toMillis()) / 3_600_000)
+  const avgCompletionHours = completionHours.length > 0
+    ? Math.round(completionHours.reduce((a, b) => a + b, 0) / completionHours.length)
+    : 0
+
+  // Response Stats
+  const responseTimes = allWos
+    .filter((wo) => wo.startedAt && wo.createdAt)
+    .map((wo) => (wo.startedAt.toMillis() - wo.createdAt.toMillis()) / 60_000)
+    .filter((t) => t > 0 && t < 10_000)
+  const avgResponseMinutes = responseTimes.length > 0
+    ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
+    : 0
+
+  // Incident Stats
+  const incidentSnap = await db.collection('incidents')
+    .where('reportedBy', '==', uid)
+    .where('createdAt', '>=', startTs)
+    .where('createdAt', '<=', endTs)
+    .get()
+  const incidents = incidentSnap.docs.map((d) => d.data())
+
+  let recurringCount = 0
+  for (let i = 0; i < incidents.length; i++) {
+    const current = incidents[i]
+    const thirtyDaysBefore = current.createdAt.toMillis() - 30 * 86_400_000
+    const isRecurring = incidents.some((prev, j) =>
+      j !== i &&
+      prev.location === current.location &&
+      prev.category === current.category &&
+      prev.createdAt.toMillis() > thirtyDaysBefore &&
+      prev.createdAt.toMillis() < current.createdAt.toMillis(),
+    )
+    if (isRecurring) recurringCount++
+  }
+
+  // PM Stats
+  const pmCompleted = pmWos.filter((wo) => wo.status === 'completed').length
+  const pmOnTime = pmWos.filter((wo) =>
+    wo.status === 'completed' && wo.completedAt && wo.dueDate &&
+    wo.completedAt.toMillis() <= wo.dueDate.toMillis(),
+  ).length
+
+  const woStats = {
+    totalAssigned: allWos.length,
+    totalCompleted: completedWos.length,
+    completedOnTime,
+    overdue: allWos.filter((wo) =>
+      wo.status !== 'completed' && wo.status !== 'cancelled' && wo.dueDate &&
+      wo.dueDate.toMillis() < Date.now(),
+    ).length,
+    inProgress: allWos.filter((wo) => wo.status === 'in_progress').length,
+    completionRate: allWos.length > 0
+      ? Math.round((completedWos.length / allWos.length) * 100) : 0,
+    onTimeRate: completedWos.length > 0
+      ? Math.round((completedOnTime / completedWos.length) * 100) : 0,
+    avgCompletionHours,
+  }
+
+  const responseStats = {
+    avgResponseMinutes,
+    fastestResponseMinutes: responseTimes.length > 0 ? Math.round(Math.min(...responseTimes)) : 0,
+    slowestResponseMinutes: responseTimes.length > 0 ? Math.round(Math.max(...responseTimes)) : 0,
+    totalResponseSamples: responseTimes.length,
+  }
+
+  const incidentStats = {
+    totalIncidentsReported: incidents.length,
+    recurringIncidents: recurringCount,
+    recurringRate: incidents.length > 0
+      ? Math.round((recurringCount / incidents.length) * 100) : 0,
+    criticalIncidents: incidents.filter((i) => i.severity === 'high' || i.severity === 'critical').length,
+  }
+
+  const pmStats = {
+    pmScheduled: pmWos.length,
+    pmCompleted,
+    pmOnTime,
+    pmCompletionRate: pmWos.length > 0
+      ? Math.round((pmCompleted / pmWos.length) * 100) : 0,
+  }
+
+  // Score
+  const score =
+    (woStats.completionRate / 100) * 30 +
+    (woStats.onTimeRate / 100) * 25 +
+    Math.max(0, 1 - (avgResponseMinutes - 60) / 180) * 20 +
+    (pmStats.pmCompletionRate / 100) * 15 +
+    Math.max(0, 1 - incidentStats.recurringRate / 100) * 10
+  const scoreRounded = Math.round(Math.min(100, score))
+
+  const grade =
+    scoreRounded >= 90 ? 'A' :
+    scoreRounded >= 75 ? 'B' :
+    scoreRounded >= 60 ? 'C' :
+    scoreRounded >= 45 ? 'D' : 'F'
+
+  // User info
+  const userDoc = await db.collection('users').doc(uid).get()
+  const userData = userDoc.data() ?? {}
+
+  return {
+    uid,
+    period,
+    name: userData.displayName ?? uid,
+    department: userData.dept ?? '',
+    role: userData.role ?? '',
+    woStats,
+    responseStats,
+    incidentStats,
+    pmStats,
+    score: scoreRounded,
+    grade,
+    trend: 'stable',
+    calculatedAt: admin.firestore.Timestamp.now(),
+    previousPeriodScore: null,
+  }
+}
+
+async function seedTechnicianKpi(): Promise<void> {
+  const period = getCurrentPeriod()
+  const usersSnap = await db.collection('users')
+    .where('role', 'in', ['technician', 'manager'])
+    .get()
+
+  if (usersSnap.empty) {
+    console.log('  No technicians/managers found — skipping technicianKpi.')
+    return
+  }
+
+  let seeded = 0
+  for (const userDoc of usersSnap.docs) {
+    try {
+      const kpi = await computeTechnicianKpiAdmin(userDoc.id, period)
+      await db.collection('technicianKpi').doc(userDoc.id).set(kpi)
+      seeded++
+    } catch (err) {
+      console.error(`  Failed for uid=${userDoc.id}:`, err)
+    }
+  }
+  console.log(`  ✅ technicianKpi: seeded for ${seeded} users (period=${period})`)
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function addDaysFn(date: Date, days: number): Date {
@@ -205,6 +401,8 @@ async function main() {
   } else {
     await seedPmSchedules()
   }
+
+  await seedTechnicianKpi()
 
   console.log('\nSeed complete.')
   process.exit(0)

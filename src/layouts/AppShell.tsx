@@ -1,6 +1,7 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { useAlertEngine } from '@/hooks/useAlertEngine'
+import { useKpiEngine } from '@/hooks/useKpiEngine'
 import BottomNav from './BottomNav'
 import OfflineBanner from '@/components/OfflineBanner'
 import { NotificationPanel } from '@/components/NotificationPanel'
@@ -351,6 +352,9 @@ export default function AppShell() {
 
   // Run alert checks only for manager/admin (hook guards internally)
   useAlertEngine()
+
+  // Compute and cache technician KPIs hourly (admin/manager only)
+  useKpiEngine()
 
   // Register FCM service worker and manage push token for all authenticated users
   useFCMToken()

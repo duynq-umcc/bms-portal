@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react'
 import { getAllStaff } from '@/firebase/db'
+import { collection, query, where, onSnapshot } from 'firebase/firestore'
+import { db } from '@/firebase/config'
 import type { StaffMember } from '@/firebase/types'
+import type { TechnicianKpi } from '@/types/firestore'
 import { CardSkeleton, EmptyState } from '@/components/ui/Table'
-import { Users, Phone, Mail, Search, ChevronDown, ChevronRight, X } from 'lucide-react'
+import TechnicianKpiTab from './TechnicianKpiTab'
+import { Users, Phone, Mail, Search, ChevronDown, ChevronRight, X, BarChart3 } from 'lucide-react'
 
 const DEPT_COLORS: Record<string, string> = {
   admin: 'bg-purple-500/15 text-purple-400',
@@ -21,6 +25,8 @@ const DEPT_LABELS: Record<string, string> = {
 }
 
 type Level = 0 | 1 | 2
+
+type OrgTab = 'tree' | 'staff' | 'kpi'
 
 function getLevel(position: string): Level {
   const p = (position || '').toLowerCase()
@@ -49,6 +55,36 @@ function Avatar({ name, dept, size = 'md' }: { name: string; dept: string; size?
       {getInitials(name)}
     </div>
   )
+}
+
+function ScoreRingSmall({ score, grade }: { score: number; grade: string }) {
+  const GRADE_RING: Record<string, string> = {
+    A: '#16a34a', B: '#0d9488', C: '#d97706', D: '#ea580c', F: '#dc2626',
+  }
+  const color = GRADE_RING[grade] ?? '#dc2626'
+  const r = 12
+  const c = 2 * Math.PI * r
+  const offset = c - (score / 100) * c
+  return (
+    <div className="relative shrink-0" style={{ width: 28, height: 28 }}>
+      <svg width={28} height={28} className="-rotate-90">
+        <circle cx={14} cy={14} r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={3} />
+        <circle cx={14} cy={14} r={r} fill="none" stroke={color} strokeWidth={3} strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={offset} style={{ transition: 'stroke-dashoffset 0.8s ease' }} />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-[9px] font-bold" style={{ color }}>
+        {score}
+      </span>
+    </div>
+  )
+}
+
+const GRADE_COLOR: Record<string, string> = {
+  A: 'bg-green-500/15 text-green-400',
+  B: 'bg-teal-500/15 text-teal-400',
+  C: 'bg-amber/15 text-amber',
+  D: 'bg-orange-500/15 text-orange-500',
+  F: 'bg-red-500/15 text-red-400',
 }
 
 function StaffDetailPanel({ staff, onClose }: { staff: StaffMember; onClose: () => void }) {
@@ -118,18 +154,37 @@ function StaffDetailPanel({ staff, onClose }: { staff: StaffMember; onClose: () 
 }
 
 export default function OrgPage() {
+  const [tab, setTab] = useState<OrgTab>('tree')
   const [staff, setStaff] = useState<StaffMember[]>([])
   const [loading, setLoading] = useState(true)
   const [dept, setDept] = useState('all')
   const [search, setSearch] = useState('')
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set())
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null)
+  const [kpiMap, setKpiMap] = useState<Record<string, TechnicianKpi>>({})
 
   useEffect(() => {
     getAllStaff().then((snap) => {
       setStaff(snap.docs.map((d) => ({ ...(d.data() as object), uid: d.id, id: d.id } as unknown as StaffMember)))
       setLoading(false)
     }).catch(() => setLoading(false))
+  }, [])
+
+  // Subscribe to KPI data for staff list
+  useEffect(() => {
+    const now = new Date()
+    const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const unsub = onSnapshot(
+      query(collection(db, 'technicianKpi'), where('period', '==', period)),
+      (snap) => {
+        const map: Record<string, TechnicianKpi> = {}
+        snap.docs.forEach((d) => {
+          map[d.id] = d.data() as TechnicianKpi
+        })
+        setKpiMap(map)
+      },
+    )
+    return unsub
   }, [])
 
   const filtered = staff.filter((s) => {
@@ -225,6 +280,7 @@ export default function OrgPage() {
     return (
       <div className="space-y-4">
         <div className="h-8 w-48"><div className="card h-full animate-pulse bg-gray-100" /></div>
+        <div className="h-8 w-72 skeleton-line" />
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[...Array(6)].map((_, i) => <CardSkeleton key={i} />)}
         </div>
@@ -235,11 +291,33 @@ export default function OrgPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-bold text-gray-900">Cơ cấu Tổ chức</h1>
+        <h1 className="text-lg font-bold text-gray-100">Cơ cấu Tổ chức</h1>
         <p className="text-sm text-gray-500">{staff.length} nhân sự · {directors.length} giám đốc · {managers.length} trưởng phòng · {employees.length} nhân viên</p>
       </div>
 
-      {/* Org Tree */}
+      {/* Tab bar */}
+      <div className="flex gap-1 bg-white/[0.03] rounded-xl p-1 max-w-sm">
+        {([
+          { key: 'tree' as OrgTab, label: 'Sơ đồ tổ chức' },
+          { key: 'staff' as OrgTab, label: 'Danh sách nhân viên' },
+          { key: 'kpi' as OrgTab, label: 'KPI nhân viên', icon: BarChart3 },
+        ]).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-t2 hover:text-gray-200'
+            }`}
+          >
+            {t.icon && <t.icon className="w-3.5 h-3.5" />}
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'kpi' && <TechnicianKpiTab />}
+
+      {tab === 'tree' && (
       <div className="card p-4 space-y-5">
         <h2 className="font-semibold text-gray-100 text-sm flex items-center gap-2">
           <Users className="w-4 h-4 text-amber" />
@@ -290,8 +368,9 @@ export default function OrgPage() {
           </div>
         )}
       </div>
+      )}
 
-      {/* Staff List Table */}
+      {tab === 'staff' && (
       <div className="card overflow-hidden">
         <div className="p-4 border-b border-white/[0.07]">
           <div className="flex flex-col sm:flex-row gap-3">
@@ -330,18 +409,19 @@ export default function OrgPage() {
                 <th className="text-left hidden sm:table-cell">SĐT</th>
                 <th className="text-left hidden xl:table-cell">Email</th>
                 <th className="text-left">Trạng thái</th>
+                <th className="text-left hidden xl:table-cell">KPI</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-12">
+                  <td colSpan={7} className="text-center py-12">
                     <EmptyState icon={<Users className="w-8 h-8" />} title="Không tìm thấy" description="Không có nhân sự phù hợp" />
                   </td>
                 </tr>
-              ) : (
-                filtered.map((s) => (
-                  <tr key={s.uid} className="hover:bg-white/[0.03] transition-colors cursor-pointer" onClick={() => setSelectedStaff(s)}>
+              ) : filtered.map((s) => {
+                  const kpi = kpiMap[s.uid]
+                  return (<tr key={s.uid} className="hover:bg-white/[0.03] transition-colors cursor-pointer" onClick={() => setSelectedStaff(s)}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <Avatar name={s.displayName || ''} dept={s.dept} size="sm" />
@@ -366,13 +446,25 @@ export default function OrgPage() {
                         {s.status === 'active' ? 'Hoạt động' : 'Ngừng'}
                       </span>
                     </td>
-                  </tr>
-                ))
-              )}
+                    <td className="px-4 py-3 hidden xl:table-cell">
+                      {kpi ? (
+                        <div className="flex items-center gap-2">
+                          <ScoreRingSmall score={kpi.score} grade={kpi.grade} />
+                          <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${GRADE_COLOR[kpi.grade] ?? 'text-gray-400'}`}>
+                            {kpi.grade}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-t3 text-xs">—</span>
+                      )}
+                    </td>
+                  </tr>)
+                })}
             </tbody>
           </table>
         </div>
       </div>
+      )}
 
       {selectedStaff && <StaffDetailPanel staff={selectedStaff} onClose={() => setSelectedStaff(null)} />}
     </div>

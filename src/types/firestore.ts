@@ -93,6 +93,8 @@ export interface WorkOrder {
   createdAt?: Timestamp
   updatedAt?: Timestamp
   completedAt?: Timestamp
+  startedAt?: Timestamp
+  dueDate?: Timestamp
   cost?: number
   notes?: string
   attachments?: string[]
@@ -274,6 +276,7 @@ export interface Incident {
   severity: IncidentSeverity
   type: IncidentType
   location: string
+  category?: string
   reportedBy: string
   assignedTo?: string
   status: IncidentStatus
@@ -978,4 +981,60 @@ export interface OperationLog {
   handover: OperationLogHandover
   checklist: OperationLogChecklist
   status: OperationLogStatus
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Collection: technicianKpi
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type KpiGrade = 'A' | 'B' | 'C' | 'D' | 'F'
+export type KpiTrend = 'up' | 'down' | 'stable'
+
+export interface WoStats {
+  totalAssigned: number
+  totalCompleted: number
+  completedOnTime: number
+  overdue: number
+  inProgress: number
+  completionRate: number
+  onTimeRate: number
+  avgCompletionHours: number
+}
+
+export interface ResponseStats {
+  avgResponseMinutes: number
+  fastestResponseMinutes: number
+  slowestResponseMinutes: number
+  totalResponseSamples: number
+}
+
+export interface IncidentStats {
+  totalIncidentsReported: number
+  recurringIncidents: number
+  recurringRate: number
+  criticalIncidents: number
+}
+
+export interface PmStats {
+  pmScheduled: number
+  pmCompleted: number
+  pmOnTime: number
+  pmCompletionRate: number
+}
+
+export interface TechnicianKpi {
+  uid: string
+  name: string
+  department: string
+  role: string
+  period: string
+  woStats: WoStats
+  responseStats: ResponseStats
+  incidentStats: IncidentStats
+  pmStats: PmStats
+  score: number
+  grade: KpiGrade
+  trend: KpiTrend
+  calculatedAt: Timestamp
+  previousPeriodScore: number | null
 }

@@ -8,11 +8,11 @@ import {
   listenPmWorkOrders,
   listenDisposalRequests,
 } from '@/firebase/db'
-import { collection, query, where, getDocs } from 'firebase/firestore'
+import { collection, query, where, orderBy, limit, onSnapshot, getDocs } from 'firebase/firestore'
 import { db } from '@/firebase/config'
 import { Timestamp } from 'firebase/firestore'
 import type { InfraSystem, WorkOrder, Incident, WarehouseItem, MedicalDevice } from '@/firebase/types'
-import type { PMWorkOrder, DisposalRequest } from '@/types/firestore'
+import type { PMWorkOrder, DisposalRequest, TechnicianKpi } from '@/types/firestore'
 import {
   Zap,
   Droplets,
@@ -26,9 +26,11 @@ import {
   XCircle,
   ShieldCheck,
   TrendingDown,
+  Users,
 } from 'lucide-react'
 import { EmptyState } from '@/components/ui/Table'
 import { startOfMonth, endOfMonth } from 'date-fns'
+import { KpiDetailPanel } from '@/components/kpi/KpiDetailPanel'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -146,6 +148,8 @@ export default function DashboardPage() {
   const [hasFirstLoad, setHasFirstLoad] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [complianceValue, setComplianceValue] = useState<number>(0)
+  const [teamKpis, setTeamKpis] = useState<TechnicianKpi[]>([])
+  const [selectedKpi, setSelectedKpi] = useState<TechnicianKpi | null>(null)
 
   useEffect(() => {
     let errMsg: string | null = null
@@ -168,6 +172,24 @@ export default function DashboardPage() {
       unsubs.forEach((u) => u())
       clearTimeout(timer)
     }
+  }, [])
+
+  // Subscribe to team KPIs
+  useEffect(() => {
+    const now = new Date()
+    const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const unsub = onSnapshot(
+      query(
+        collection(db, 'technicianKpi'),
+        where('period', '==', period),
+        orderBy('score', 'desc'),
+        limit(10),
+      ),
+      (snap) => {
+        setTeamKpis(snap.docs.map((d) => d.data() as TechnicianKpi))
+      },
+    )
+    return unsub
   }, [])
 
   useEffect(() => {
@@ -592,6 +614,76 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* ─── ROW 4: Team KPI widget ─── */}
+      {teamKpis.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h3 className="font-semibold text-gray-200 flex items-center gap-2">
+              <Users className="w-4 h-4 text-amber" />
+              Hiệu suất nhân viên tháng này
+            </h3>
+            <a href="/org?tab=kpi" className="text-xs text-amber hover:underline">
+              Xem tất cả →
+            </a>
+          </div>
+          <div className="p-4">
+            <div className="space-y-2">
+              {teamKpis.slice(0, 4).map((kpi, i) => {
+                const gradeColor: Record<string, string> = {
+                  A: 'text-green-400', B: 'text-teal-400', C: 'text-amber', D: 'text-orange-500', F: 'text-red-400',
+                }
+                const medals = ['🥇', '🥈', '🥉', '']
+                return (
+                  <button
+                    key={kpi.uid}
+                    onClick={() => setSelectedKpi(kpi)}
+                    className="w-full flex items-center gap-3 px-3 py-2 bg-white/[0.03] hover:bg-white/[0.06] rounded-xl transition-all text-left"
+                  >
+                    <span className="text-base shrink-0 w-6 text-center">{medals[i]}</span>
+                    <div
+                      className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                      style={{
+                        backgroundColor: `${gradeColor[kpi.grade]?.replace('text-', '')}20`,
+                        color: gradeColor[kpi.grade],
+                      }}
+                    >
+                      {(kpi.name.split(' ').slice(0, 2).map((w) => w[0]).join(''))}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-200 truncate">{kpi.name}</p>
+                      <p className="text-xs text-t3">{kpi.department || kpi.role}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        <p className={`text-lg font-bold ${gradeColor[kpi.grade] ?? 'text-gray-400'}`}>
+                          {kpi.score}
+                        </p>
+                        <p className="text-[10px] text-t3">điểm</p>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-xs font-bold ${gradeColor[kpi.grade] ?? 'text-gray-400'}`}
+                        style={{ backgroundColor: `${gradeColor[kpi.grade]?.replace('text-', '')}15` }}>
+                        {kpi.grade}
+                      </span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            {teamKpis.some((k) => k.score < 60) && (
+              <div className="mt-3 px-3 py-2 bg-amber/10 border border-amber/20 rounded-lg">
+                <p className="text-xs text-amber">
+                  {teamKpis.filter((k) => k.score < 60).length} nhân viên cần hỗ trợ cải thiện
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {selectedKpi && (
+        <KpiDetailPanel kpi={selectedKpi} onClose={() => setSelectedKpi(null)} />
+      )}
     </div>
   )
 }

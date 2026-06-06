@@ -320,5 +320,28 @@ service cloud.firestore {
       allow create, update: if getUserRole() in ['admin', 'manager'];
       allow delete: if false;
     }
+
+    // Technician KPI cache
+    match /technicianKpi/{uid} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated()
+        && (request.auth.uid == uid
+            || getUserRole() in ['admin', 'manager']);
+    }
+
+    // KPI History
+    match /kpiHistory/{uid} {
+      allow read: if isAuthenticated()
+        && (request.auth.uid == uid
+            || getUserRole() in ['admin', 'manager']);
+      allow write: if getUserRole() in ['admin', 'manager'];
+
+      match /months/{period} {
+        allow read: if isAuthenticated()
+          && (request.auth.uid == uid
+              || getUserRole() in ['admin', 'manager']);
+        allow write: if getUserRole() in ['admin', 'manager'];
+      }
+    }
   }
 }
