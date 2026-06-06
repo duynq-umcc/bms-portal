@@ -7,38 +7,18 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks(id) {
-          // ✅ React PHẢI được check ĐẦU TIÊN — trước khi vendor catch-all
-          // Lỗi cũ: react/ bị vendor bắt trước vì vendor là catch-all cuối
-          // nhưng react-dom lại không match pattern '/node_modules/react/'
-          if (
-            id.includes('/node_modules/react/') ||
-            id.includes('/node_modules/react-dom/') ||
-            id.includes('/node_modules/react-router') ||
-            id.includes('/node_modules/react-router-dom/')
-          ) return 'react-core'
-
-          // Các lib lớn — check trước vendor
-          if (id.includes('/node_modules/firebase/')) return 'firebase'
-          if (id.includes('/node_modules/recharts/')) return 'recharts'
-          if (id.includes('/node_modules/@tanstack/')) return 'tanstack'
-          if (
-            id.includes('/node_modules/react-hook-form/') ||
-            id.includes('/node_modules/@hookform/') ||
-            id.includes('/node_modules/zod/')
-          ) return 'form'
-          if (id.includes('/node_modules/date-fns/')) return 'date-fns'
-          if (id.includes('/node_modules/lucide-react/')) return 'icons'
-          if (id.includes('/node_modules/zustand/')) return 'zustand'
-          if (id.includes('/node_modules/scheduler/')) return 'scheduler'
-          if (id.includes('/node_modules/workbox')) return 'workbox'
-
-          // ✅ vendor là catch-all CUỐI CÙNG
-          if (id.includes('node_modules')) return 'vendor'
+        // ✅ Object syntax — Rollup tự resolve dependency order, không bị circular chunk
+        // Khác với function syntax: không cần quan tâm thứ tự, Rollup xử lý tự động
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'firebase':     ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+          'charts':       ['recharts'],
+          'forms':        ['react-hook-form', '@hookform/resolvers', 'zod'],
+          'utils':        ['date-fns', 'zustand', '@tanstack/react-query', 'lucide-react'],
         },
       },
     },
-    chunkSizeWarningLimit: 500,
+    chunkSizeWarningLimit: 800,
   },
   plugins: [
     react(),
