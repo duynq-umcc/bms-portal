@@ -90,6 +90,80 @@ function formatDate(ts: Timestamp): string {
   })
 }
 
+export interface ExportBatchLine {
+  batchNumber: string
+  importDate: Timestamp
+  expiryDate: Timestamp | null
+  deductQty: number
+  remainingAfter: number
+}
+
+export interface ExportPreview {
+  lines: ExportBatchLine[]
+  totalAvailable: number
+  isValid: boolean
+  errorMessage?: string
+}
+
+export async function getExportBatchPreview(
+  itemId: string,
+  qty: number,
+  method: 'fifo' | 'fefo' = 'fifo',
+  currentBatchNumber?: string,
+): Promise<ExportPreview> {
+  const batches = method === 'fifo'
+    ? await getBatchesFIFO(itemId)
+    : await getBatchesFEFO(itemId)
+
+  const totalAvailable = batches.reduce((sum, b) => sum + b.quantity, 0)
+
+  // If currentBatchNumber provided, validate against that batch first (UI-level check)
+  if (currentBatchNumber) {
+    const currentBatch = batches.find((b) => b.batchNumber === currentBatchNumber)
+    if (currentBatch && qty > currentBatch.quantity) {
+      return {
+        lines: [],
+        totalAvailable,
+        isValid: false,
+        errorMessage: `Lô ${currentBatchNumber} chỉ còn ${currentBatch.quantity}. Vui lòng chọn lô khác hoặc giảm số lượng.`,
+      }
+    }
+  }
+
+  if (qty > totalAvailable) {
+    return {
+      lines: [],
+      totalAvailable,
+      isValid: false,
+      errorMessage: `Tổng tồn kho không đủ: cần ${qty}, còn ${totalAvailable}`,
+    }
+  }
+
+  const lines: ExportBatchLine[] = []
+  let remaining = qty
+  for (const batch of batches) {
+    if (remaining <= 0) break
+    const deduct = Math.min(batch.quantity, remaining)
+    lines.push({
+      batchNumber: batch.batchNumber,
+      importDate: batch.importDate,
+      expiryDate: batch.expiryDate,
+      deductQty: deduct,
+      remainingAfter: batch.quantity - deduct,
+    })
+    remaining -= deduct
+  }
+
+  return {
+    lines,
+    totalAvailable,
+    isValid: remaining <= 0,
+    errorMessage: remaining > 0
+      ? `Chỉ còn ${totalAvailable} trong kho`
+      : undefined,
+  }
+}
+
 export async function validateFIFOExport(
   itemId: string,
   selectedBatch: string,

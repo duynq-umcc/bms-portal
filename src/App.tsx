@@ -24,6 +24,9 @@ const AssetsPage = lazy(() => import('@/modules/assets/AssetsPage'))
 const VendorsPage = lazy(() => import('@/modules/vendors/VendorsPage'))
 const EnvironmentPage = lazy(() => import('@/modules/environment/EnvironmentPage'))
 const ReportsPage = lazy(() => import('@/modules/reports/ReportsPage'))
+const FiveSPage = lazy(() => import('@/modules/fiveS/FiveSPage'))
+const PatrolPage = lazy(() => import('@/modules/patrol/PatrolPage'))
+const TrainingPage = lazy(() => import('@/modules/training/TrainingPage'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -177,6 +180,30 @@ export default function App() {
                 element={
                   <Suspense fallback={<PageFallback />}>
                     <ReportsPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/five-s"
+                element={
+                  <Suspense fallback={<PageFallback />}>
+                    <FiveSPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/patrol"
+                element={
+                  <Suspense fallback={<PageFallback />}>
+                    <PatrolPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/training"
+                element={
+                  <Suspense fallback={<PageFallback />}>
+                    <TrainingPage />
                   </Suspense>
                 }
               />

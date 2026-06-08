@@ -8,7 +8,7 @@ import { addDisposalRequest, updateAsset } from '@/firebase/db'
 import { createNotificationForRoles } from '@/utils/createNotification'
 import { toast } from '@/components/ui/Toast'
 import type { Asset } from '@/firebase/types'
-import type { DisposalReason, DisposalMethod, DisposalAttachment, DisposalRequestStatus } from '@/types/firestore'
+import type { DisposalRequest, DisposalReason, DisposalMethod, DisposalAttachment, DisposalRequestStatus } from '@/types/firestore'
 import { format } from 'date-fns'
 import { vi } from 'date-fns/locale'
 
@@ -63,6 +63,7 @@ interface Props {
   isOpen: boolean
   onClose: () => void
   asset: Asset
+  existingRequest?: DisposalRequest & { id: string }
 }
 
 // ─── photo upload ─────────────────────────────────────────────────────────────
@@ -421,7 +422,7 @@ function Step3Proposal({ data, onChange, bookValue }: { data: Step3Data; onChang
 
 interface Step4Data {
   photos: PhotoUpload[]
-  attachments: { file: File; name: string; type: string; url?: string; uploading: boolean; progress: number }[]
+  attachments: { file?: File; name: string; type: string; url?: string; uploading: boolean; progress: number }[]
 }
 
 function Step4Attachments({ data, onChange }: { data: Step4Data; onChange: (d: Step4Data) => void }) {
@@ -502,24 +503,25 @@ function Step4Attachments({ data, onChange }: { data: Step4Data; onChange: (d: S
 
 // ─── main modal ───────────────────────────────────────────────────────────────
 
-export default function DisposalRequestModal({ isOpen, onClose, asset }: Props) {
+export default function DisposalRequestModal({ isOpen, onClose, asset, existingRequest }: Props) {
   const { user } = useAuth()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
+  const isEditMode = !!existingRequest
 
   const [step2, setStep2] = useState<Step2Data>({
-    requestReason: '',
-    conditionDescription: '',
-    repairAttempts: '',
-    repairCostToDate: 0,
+    requestReason: existingRequest?.requestReason || '',
+    conditionDescription: existingRequest?.conditionDescription || '',
+    repairAttempts: existingRequest?.repairAttempts || '',
+    repairCostToDate: existingRequest?.repairCostToDate ?? 0,
     hasRepairWOs: false,
   })
 
   const [step3, setStep3] = useState<Step3Data>({
-    proposedDisposalMethod: '',
-    proposedDisposalValue: 0,
-    proposedTransferDept: '',
-    justification: '',
+    proposedDisposalMethod: existingRequest?.proposedDisposalMethod || '',
+    proposedDisposalValue: existingRequest?.proposedDisposalValue ?? 0,
+    proposedTransferDept: existingRequest?.proposedTransferDept || '',
+    justification: existingRequest?.justification || '',
     targetDate: (() => {
       const d = new Date()
       d.setDate(d.getDate() + 30)
@@ -527,9 +529,21 @@ export default function DisposalRequestModal({ isOpen, onClose, asset }: Props) 
     })(),
   })
 
-  const [step4, setStep4] = useState<Step4Data>({
-    photos: [],
-    attachments: [],
+  const [step4, setStep4] = useState<Step4Data>(() => {
+    const existingAttachments = existingRequest?.attachments || []
+    // Separate existing attachments into photos and other docs
+    const photoExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']
+    const photos: Step4Data['photos'] = []
+    const otherAttachments: Step4Data['attachments'] = []
+    for (const a of existingAttachments) {
+      const ext = (a.fileName || '').split('.').pop()?.toLowerCase()
+      if (ext && photoExtensions.includes(ext)) {
+        photos.push({ url: a.url, caption: a.fileName, uploading: false, progress: 100 })
+      } else {
+        otherAttachments.push({ name: a.fileName, type: a.type || '', url: a.url, uploading: false, progress: 100 })
+      }
+    }
+    return { photos, attachments: otherAttachments }
   })
 
   const dep = calcBookValue(asset)
@@ -545,6 +559,11 @@ export default function DisposalRequestModal({ isOpen, onClose, asset }: Props) 
     const attachments: DisposalAttachment[] = []
 
     for (const photo of step4.photos) {
+      // Keep existing uploaded photos (those with URL but no file)
+      if (photo.url && !photo.file) {
+        attachments.push({ url: photo.url, fileName: photo.caption || 'photo', type: 'image' })
+        continue
+      }
       if (!photo.file) continue
       const ext = photo.file.name.split('.').pop()
       const filename = `photo_${Date.now()}.${ext}`
@@ -558,6 +577,11 @@ export default function DisposalRequestModal({ isOpen, onClose, asset }: Props) 
     }
 
     for (const att of step4.attachments) {
+      // Keep existing attachment URLs
+      if (att.url && !att.file) {
+        attachments.push({ url: att.url, fileName: att.name, type: att.type })
+        continue
+      }
       if (!att.file) continue
       const path = `disposal/requests/${requestId}/${att.file.name}`
       const storageRef = ref(storage, path)
@@ -578,6 +602,31 @@ export default function DisposalRequestModal({ isOpen, onClose, asset }: Props) 
     }
     setSaving(true)
     try {
+      if (isEditMode && existingRequest) {
+        const uploadedAttachments = await uploadAllFiles(existingRequest.id)
+        const updates = {
+          requestReason: step2.requestReason as DisposalReason,
+          conditionDescription: step2.conditionDescription,
+          repairAttempts: step2.repairAttempts,
+          repairCostToDate: step2.repairCostToDate,
+          proposedDisposalMethod: step3.proposedDisposalMethod as DisposalMethod,
+          proposedDisposalValue: step3.proposedDisposalValue,
+          proposedTransferDept: step3.proposedDisposalMethod === 'transfer_to_dept' ? step3.proposedTransferDept : null,
+          justification: step3.justification,
+          status: (asDraft ? 'draft' : 'pending_review') as DisposalRequestStatus,
+          updatedAt: Timestamp.now(),
+        }
+        const { updateDisposalRequest: upd } = await import('@/firebase/db')
+        await upd(existingRequest.id, {
+          ...updates,
+          ...(uploadedAttachments.length > 0 ? { attachments: uploadedAttachments } : {}),
+        })
+        toast.success(asDraft ? 'Đã lưu nháp' : 'Đề xuất đã được cập nhật')
+        onClose()
+        return
+      }
+
+      // New request — create doc first to get real ID for file uploads
       const docData = {
         assetId: asset.id,
         assetName: asset.name,
@@ -609,11 +658,11 @@ export default function DisposalRequestModal({ isOpen, onClose, asset }: Props) 
 
       const docRef = await addDisposalRequest(docData)
 
-      // Upload files and update attachments
+      // Upload files with real document ID
       const uploadedAttachments = await uploadAllFiles(docRef.id)
       if (uploadedAttachments.length > 0) {
-        const { updateDisposalRequest } = await import('@/firebase/db')
-        await updateDisposalRequest(docRef.id, { attachments: uploadedAttachments })
+        const { updateDisposalRequest: upd } = await import('@/firebase/db')
+        await upd(docRef.id, { attachments: uploadedAttachments })
       }
 
       // Update asset status
@@ -648,7 +697,7 @@ export default function DisposalRequestModal({ isOpen, onClose, asset }: Props) 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.1] shrink-0">
           <div>
-            <h3 className="font-semibold text-gray-100 text-base">Đề xuất thanh lý tài sản</h3>
+            <h3 className="font-semibold text-gray-100 text-base">{isEditMode ? 'Sửa đề xuất thanh lý' : 'Đề xuất thanh lý tài sản'}</h3>
             <p className="text-xs text-t3 mt-0.5">{asset.name} — {asset.code}</p>
           </div>
           <button onClick={onClose} className="p-1.5 text-t3 hover:text-gray-200 hover:bg-white/[0.08] rounded-lg">

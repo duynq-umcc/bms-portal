@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react'
-import { listenPmSchedules, updatePmSchedule } from '@/firebase/db'
+import { listenPmSchedules, updatePmSchedule, addPmWorkOrder, listenPmWorkOrdersBySchedule, listenPmExecutions } from '@/firebase/db'
 import { checkAndCreatePmWorkOrders } from '@/utils/pmEngine'
 import { toast } from '@/components/ui/Toast'
 import { useAuth } from '@/contexts/AuthContext'
 import PmScheduleFormModal from './PmScheduleFormModal'
 import { format, differenceInDays } from 'date-fns'
+import { Timestamp } from 'firebase/firestore'
 import {
   Calendar, Plus, Play, CheckCircle2,
-  MoreVertical, History, Edit3, Zap, ToggleLeft, ToggleRight,
+  MoreVertical, History, Edit3, Zap, ToggleLeft, ToggleRight, X, CheckCircle,
 } from 'lucide-react'
-import type { PMSchedule, PMFrequencyType } from '@/types/firestore'
+import type { PMSchedule, PMFrequencyType, PMWorkOrder, PMWorkOrderTask, PMExecutionLog } from '@/types/firestore'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -215,24 +216,148 @@ function ScheduleRow({
 
 // ─── Main component ────────────────────────────────────────────────────
 
+// ─── Schedule history modal (P1.2) ────────────────────────────────────────────
+
+function PmHistoryModal({
+  sched,
+  workOrders,
+  executions,
+  onClose,
+}: {
+  sched: (PMSchedule & { id: string }) | null
+  workOrders: (PMWorkOrder & { id: string })[]
+  executions: (PMExecutionLog & { id: string })[]
+  onClose: () => void
+}) {
+  if (!sched) return null
+
+  const statusBadge = (status: string) => {
+    const map: Record<string, string> = {
+      scheduled: 'badge-blue',
+      inProgress: 'badge-warning',
+      completed: 'badge-success',
+      overdue: 'badge-danger',
+      cancelled: 'badge-gray',
+    }
+    return <span className={`badge ${map[status] ?? 'badge-gray'} text-xs`}>{status}</span>
+  }
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="fixed inset-0 z-40 bg-black/50" onClick={onClose} />
+
+      {/* Sidebar */}
+      <div className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-md bg-ink-2 border-l border-white/[0.08] flex flex-col animate-slide-in">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.07]">
+          <div>
+            <h2 className="font-semibold text-gray-200 text-sm">Lịch sử bảo trì</h2>
+            <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{sched.name}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/[0.08] rounded-lg">
+            <X className="w-4 h-4 text-gray-400" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
+          {/* Work Orders */}
+          <section>
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              Work Orders ({workOrders.length})
+            </h3>
+            {workOrders.length === 0 ? (
+              <p className="text-sm text-gray-600 text-center py-4">Chưa có Work Order nào</p>
+            ) : (
+              <div className="space-y-2">
+                {workOrders.map((wo) => (
+                  <div key={wo.id} className="bg-white/[0.04] rounded-xl p-3">
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <span className="text-sm font-medium text-gray-300 truncate">
+                        {wo.scheduleName}
+                      </span>
+                      {statusBadge(wo.status)}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                      <span>Hạn: {wo.dueDate ? format(wo.dueDate.toDate(), 'dd/MM/yyyy') : '—'}</span>
+                      <span>Người: {wo.assignedToName || '—'}</span>
+                    </div>
+                    {wo.completedAt && (
+                      <div className="flex items-center gap-1 mt-1 text-xs text-green-400">
+                        <CheckCircle className="w-3 h-3" />
+                        Hoàn thành {format(wo.completedAt.toDate(), 'dd/MM/yyyy')}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Execution log */}
+          <section>
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              Nhật ký engine ({executions.length})
+            </h3>
+            {executions.length === 0 ? (
+              <p className="text-sm text-gray-600 text-center py-4">Chưa có nhật ký</p>
+            ) : (
+              <div className="space-y-2">
+                {executions.map((exec) => (
+                  <div key={exec.id} className="bg-white/[0.04] rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs text-gray-400">
+                        {exec.runAt ? format(exec.runAt.toDate(), 'dd/MM/yyyy HH:mm') : '—'}
+                      </span>
+                      <span className="text-xs text-amber">
+                        {exec.woCreated} WO tạo · {exec.schedulesChecked} lịch checked
+                      </span>
+                    </div>
+                    {exec.details && exec.details.length > 0 && (
+                      <ul className="text-xs text-gray-500 space-y-0.5 mt-1">
+                        {exec.details.slice(0, 3).map((d, i) => (
+                          <li key={i} className="truncate">{d}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    </>
+  )
+}
+
 export default function PmScheduleManager() {
   const { user } = useAuth()
   const [schedules, setSchedules] = useState<(PMSchedule & { id: string })[]>([])
-  const [loading, setLoading] = useState(true)
+  const loading = schedules.length === 0
   const [freqFilter, setFreqFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('active')
   const [deptFilter, setDeptFilter] = useState('all')
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<PMSchedule & { id: string } | undefined>()
   const [running, setRunning] = useState(false)
+  const [historySched, setHistorySched] = useState<PMSchedule & { id: string } | null>(null)
+  const [historyWos, setHistoryWos] = useState<(PMWorkOrder & { id: string })[]>([])
+  const [historyExecs, setHistoryExecs] = useState<(PMExecutionLog & { id: string })[]>([])
 
   const isManager = user?.role === 'admin' || user?.role === 'manager'
 
   useEffect(() => {
     const unsub = listenPmSchedules(setSchedules as (docs: (PMSchedule & { id: string })[]) => void)
-    const timer = setTimeout(() => setLoading(false), 800)
-    return () => { unsub(); clearTimeout(timer) }
+    return () => { unsub() }
   }, [])
+
+  // P1.2: Load PM work orders and execution logs when a schedule is selected
+  useEffect(() => {
+    if (!historySched) return
+    const unsubWos = listenPmWorkOrdersBySchedule(historySched.id, setHistoryWos)
+    const unsubExecs = listenPmExecutions(setHistoryExecs)
+    return () => { unsubWos(); unsubExecs() }
+  }, [historySched])
 
   const filtered = schedules.filter((s) => {
     if (freqFilter !== 'all' && s.frequency.type !== freqFilter) return false
@@ -259,11 +384,60 @@ export default function PmScheduleManager() {
     }
   }
 
+  // P1.2: Opens history sidebar for a specific schedule
+  const handleViewHistory = (sched: PMSchedule & { id: string }) => {
+    setHistorySched(sched)
+  }
+
+  // P1.2: Creates a PM work order directly for this schedule
+  const handleCreateWO = async (sched: PMSchedule & { id: string }) => {
+    const tasks: PMWorkOrderTask[] = sched.tasks.map((t) => ({
+      ...t,
+      completed: false,
+      completedAt: null,
+      completedBy: null,
+      note: '',
+    }))
+    try {
+      await addPmWorkOrder({
+        pmScheduleId: sched.id,
+        scheduleName: sched.name,
+        assetId: sched.assetId ?? '',
+        assetName: sched.assetName,
+        assetCode: sched.assetCode ?? '',
+        location: sched.location,
+        department: sched.department ?? '',
+        dueDate: sched.nextDueDate ?? Timestamp.now(),
+        scheduledDate: sched.nextDueDate ?? Timestamp.now(),
+        startedAt: null,
+        completedAt: null,
+        status: 'scheduled',
+        assignedTo: sched.assignedTo ?? '',
+        assignedToName: sched.assignedToName ?? 'Chưa phân công',
+        requiresContractor: sched.requiresContractor ?? false,
+        contractorId: sched.contractorId ?? null,
+        tasks,
+        completionPhotos: [],
+        technicianNotes: '',
+        actualDuration: null,
+        partsUsed: [],
+        signedOffBy: null,
+        signedOffAt: null,
+        signedOffNote: null,
+        generatedAt: Timestamp.now(),
+        generatedBy: 'manual',
+      })
+      toast.success(`Đã tạo Work Order cho "${sched.name}"`)
+    } catch {
+      toast.error('Tạo Work Order thất bại')
+    }
+  }
+
   const handleRunEngine = async () => {
     setRunning(true)
     try {
       const result = await checkAndCreatePmWorkOrders()
-      toast.success(`Đã tạo ${result.created} Work Order, ${result.overdue} quá hạn`)
+      toast.success(`Đã tạo ${result.created} Work Order, ${result.overdue} quá hạn${result.skipped > 0 ? ` (${result.skipped} đã bỏ qua — chạy gần đây)` : ''}`)
     } catch {
       toast.error('Chạy engine thất bại')
     } finally {
@@ -388,8 +562,8 @@ export default function PmScheduleManager() {
                     key={sched.id}
                     sched={sched}
                     onEdit={() => { setEditing(sched); setShowForm(true) }}
-                    onViewHistory={() => toast.info(`Xem lịch sử: ${sched.name}`)}
-                    onCreateWO={() => toast.info(`Tạo WO ngay cho: ${sched.name}`)}
+                    onViewHistory={() => handleViewHistory(sched)}
+                    onCreateWO={() => handleCreateWO(sched)}
                     onToggle={() => handleToggleActive(sched)}
                     onToggleAuto={() => handleToggleAuto(sched)}
                   />
@@ -399,6 +573,14 @@ export default function PmScheduleManager() {
           </div>
         )}
       </div>
+
+      {/* P1.2: Schedule history sidebar */}
+      <PmHistoryModal
+        sched={historySched}
+        workOrders={historyWos}
+        executions={historyExecs}
+        onClose={() => setHistorySched(null)}
+      />
 
       <PmScheduleFormModal
         open={showForm}

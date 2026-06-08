@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
+import { Timestamp } from 'firebase/firestore'
 import {
   listenVendors, updateVendor,
   listenVendorContracts, addVendorContract,
+  listenVendorRatings,
 } from '@/firebase/db'
-import type { Vendor, Contract } from '@/firebase/types'
+import type { Vendor, Contract, VendorRating } from '@/firebase/types'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -49,8 +51,13 @@ function StarRating({ rating }: { rating: number }) {
 
 function VendorDetailPanel({ vendor, onClose }: { vendor: Vendor; onClose: () => void }) {
   const [contracts, setContracts] = useState<Contract[]>([])
-  const [rating, setRating] = useState(vendor.rating)
+  const [rating, setRating] = useState(vendor.rating ?? 0)
   const [editingRating, setEditingRating] = useState(false)
+  const [showEval, setShowEval] = useState(false)
+  const [evaluation, setEvaluation] = useState(vendor.evaluation ?? {
+    quality: 0, response: 0, price: 0, reliability: 0, documentation: 0,
+  })
+  const [savingEval, setSavingEval] = useState(false)
 
   useEffect(() => {
     const unsub = listenVendorContracts(vendor.id, setContracts)
@@ -65,6 +72,31 @@ function VendorDetailPanel({ vendor, onClose }: { vendor: Vendor; onClose: () =>
       toast.success('Đã cập nhật đánh giá')
     } catch { toast.error('Cập nhật thất bại') }
   }
+
+  const handleSaveEval = async () => {
+    setSavingEval(true)
+    try {
+      const computedOverall = (
+        evaluation.quality + evaluation.response +
+        evaluation.price + evaluation.reliability + evaluation.documentation
+      ) / 5
+      const newRating = Math.round((computedOverall / 5) * rating) || Math.round(computedOverall)
+      await updateVendor(vendor.id, {
+        evaluation,
+        rating: Math.min(5, Math.max(0, newRating)),
+      } as Partial<Vendor>)
+      toast.success('Đã lưu đánh giá chi tiết')
+      setShowEval(false)
+    } catch { toast.error('Lưu thất bại') } finally { setSavingEval(false) }
+  }
+
+  const criteria = [
+    { key: 'quality', label: 'Chất lượng' },
+    { key: 'response', label: 'Phản hồi' },
+    { key: 'price', label: 'Giá cả' },
+    { key: 'reliability', label: 'Đúng hạn' },
+    { key: 'documentation', label: 'Hồ sơ' },
+  ] as const
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -114,6 +146,79 @@ function VendorDetailPanel({ vendor, onClose }: { vendor: Vendor; onClose: () =>
               </div>
             )}
           </div>
+
+          {/* Evaluation criteria */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Đánh giá chi tiết (5 tiêu chí)</h4>
+              <button
+                onClick={() => setShowEval(true)}
+                className="text-xs text-amber hover:underline"
+              >
+                {vendor.evaluation ? 'Sửa' : 'Đánh giá'}
+              </button>
+            </div>
+            {vendor.evaluation ? (
+              <div className="space-y-2">
+                {criteria.map((c) => (
+                  <div key={c.key} className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500 w-24 shrink-0">{c.label}</span>
+                    <div className="flex gap-0.5">
+                      {[1, 2, 3, 4, 5].map((i) => (
+                        <div key={i} className={`w-5 h-5 rounded-sm ${i <= (evaluation[c.key] ?? 0) ? 'bg-amber' : 'bg-gray-200'}`} />
+                      ))}
+                    </div>
+                    <span className="text-xs font-medium text-gray-700">{evaluation[c.key] ?? 0}/5</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 italic">Chưa có đánh giá chi tiết</p>
+            )}
+          </div>
+
+          {/* Evaluation modal */}
+          {showEval && (
+            <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between mb-1">
+                <h5 className="text-sm font-semibold text-gray-900">Đánh giá chi tiết</h5>
+                <button onClick={() => setShowEval(false)} className="p-1"><X className="w-4 h-4 text-gray-400" /></button>
+              </div>
+              {criteria.map((c) => (
+                <div key={c.key}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-gray-600">{c.label}</span>
+                    <span className="text-sm font-medium text-amber">{evaluation[c.key] ?? 0}/5</span>
+                  </div>
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <button
+                        key={i}
+                        onClick={() => setEvaluation((e) => ({ ...e, [c.key]: i }))}
+                        className={`flex-1 h-8 rounded-lg font-bold text-sm transition-colors ${
+                          i <= (evaluation[c.key] ?? 0)
+                            ? 'bg-amber text-white'
+                            : 'bg-gray-100 text-gray-400 hover:bg-amber/20'
+                        }`}
+                      >
+                        {i}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={handleSaveEval}
+                  disabled={savingEval}
+                  className="btn-primary flex-1 text-xs"
+                >
+                  {savingEval ? 'Đang lưu...' : 'Lưu đánh giá'}
+                </button>
+                <button onClick={() => setShowEval(false)} className="btn-secondary text-xs">Hủy</button>
+              </div>
+            </div>
+          )}
 
           {/* Contracts */}
           {contracts.length > 0 && (
@@ -259,8 +364,8 @@ function ContractsTab() {
     try {
       await addVendorContract(selectedVendor, {
         title: data.title,
-        startDate: new Date(data.startDate) as any,
-        endDate: new Date(data.endDate) as any,
+        startDate: Timestamp.fromDate(new Date(data.startDate)),
+        endDate: Timestamp.fromDate(new Date(data.endDate)),
         value: data.value,
         status: 'active',
         description: data.description,
@@ -367,26 +472,58 @@ function ContractsTab() {
 
 function RatingsTab() {
   const [vendors, setVendors] = useState<Vendor[]>([])
+  const [ratings, setRatings] = useState<VendorRating[]>([])
+
+  // P2.4: Aggregate vendorRatings into averaged scores per vendor
+  const vendorScoreMap = (() => {
+    const map: Record<string, { quality: number; schedule: number; cost: number; support: number; count: number }> = {}
+    for (const r of ratings) {
+      if (!map[r.vendorId]) map[r.vendorId] = { quality: 0, schedule: 0, cost: 0, support: 0, count: 0 }
+      map[r.vendorId].quality += r.quality
+      map[r.vendorId].schedule += r.schedule
+      map[r.vendorId].cost += r.cost
+      map[r.vendorId].support += r.support
+      map[r.vendorId].count++
+    }
+    const result: Record<string, { quality: number; schedule: number; cost: number; support: number }> = {}
+    for (const [id, agg] of Object.entries(map)) {
+      result[id] = {
+        quality: Math.round(agg.quality / agg.count),
+        schedule: Math.round(agg.schedule / agg.count),
+        cost: Math.round(agg.cost / agg.count),
+        support: Math.round(agg.support / agg.count),
+      }
+    }
+    return result
+  })()
+
   const top5 = vendors
     .filter((v) => v.type === 'contractor')
     .sort((a, b) => b.rating - a.rating)
     .slice(0, 5)
 
-  const radarData = (() => {
-    return [
-      { criteria: 'Chất lượng', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, v.rating])) },
-      { criteria: 'Tiến độ', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (i % 2 === 0 ? 0.5 : -0.3))])) },
-      { criteria: 'Giá cả', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (i % 3 === 0 ? 0.2 : -0.4))])) },
-      { criteria: 'Hỗ trợ', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (i % 2 === 1 ? 0.3 : -0.2))])) },
-      { criteria: 'An toàn', ...Object.fromEntries(top5.map((v, i) => [`v${i}`, Math.min(5, v.rating + (i % 4 === 0 ? 0.4 : -0.1))])) },
-    ]
-  })()
+  const hasRatings = top5.some((v) => vendorScoreMap[v.id])
+
+  const radarCriteria = [
+    { key: 'quality', label: 'Chất lượng' },
+    { key: 'schedule', label: 'Đúng hạn' },
+    { key: 'cost', label: 'Giá cả' },
+    { key: 'support', label: 'Hỗ trợ' },
+  ]
+
+  const radarData = hasRatings
+    ? radarCriteria.map(({ key, label }) => ({
+        criteria: label,
+        ...Object.fromEntries(top5.map((v, i) => [`v${i}`, vendorScoreMap[v.id]?.[key as keyof typeof vendorScoreMap[string]] ?? 0])),
+      }))
+    : []
 
   const COLORS = ['#f59e0b', '#3b82f6', '#16a34a', '#ef4444', '#8b5cf6']
 
   useEffect(() => {
-    const unsub = listenVendors(setVendors)
-    return () => unsub()
+    const unsubV = listenVendors(setVendors)
+    const unsubR = listenVendorRatings(setRatings)
+    return () => { unsubV(); unsubR() }
   }, [])
 
   return (
@@ -427,6 +564,13 @@ function RatingsTab() {
       {top5.length > 0 && (
         <div className="card p-4">
           <h3 className="font-semibold text-gray-100 text-sm mb-4">So sánh đánh giá nhà thầu (top 5)</h3>
+          {!hasRatings ? (
+            <div className="text-center py-8">
+              <Star className="w-8 h-8 text-gray-600 mx-auto mb-2" />
+              <p className="text-sm text-t3">Chưa có đánh giá chi tiết</p>
+              <p className="text-xs text-gray-600 mt-1">Thêm dữ liệu đánh giá vào hồ sơ nhà thầu để hiển thị biểu đồ radar</p>
+            </div>
+          ) : (
           <ResponsiveContainer width="100%" height={300}>
             <RadarChart data={radarData}>
               <PolarGrid stroke="rgba(255,255,255,0.1)" />
@@ -438,6 +582,7 @@ function RatingsTab() {
               <Legend wrapperStyle={{ fontSize: 10 }} />
             </RadarChart>
           </ResponsiveContainer>
+          )}
         </div>
       )}
     </div>
@@ -463,8 +608,8 @@ export default function VendorsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-bold text-gray-900">Nhà cung cấp & Nhà thầu</h1>
-        <p className="text-sm text-gray-500">{vendors.length} nhà cung cấp · {activeCount} đang hợp tác · {expiringCount} chờ gia hạn</p>
+        <h1 className="text-lg font-bold text-gray-100">Nhà cung cấp & Nhà thầu</h1>
+        <p className="text-sm text-t2">{vendors.length} nhà cung cấp · {activeCount} đang hợp tác · {expiringCount} chờ gia hạn</p>
       </div>
 
       {/* Tab bar */}

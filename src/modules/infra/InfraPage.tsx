@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { listenSystemReadings } from '@/firebase/db'
+import { listenSystemReadings, listenPmWorkOrdersByAsset } from '@/firebase/db'
 import type { InfraSystem, OperationLogShift } from '@/firebase/types'
 import Modal from '@/components/ui/Modal'
 import { CardSkeleton } from '@/components/ui/Table'
@@ -19,6 +19,8 @@ import {
 } from 'firebase/firestore'
 import { db } from '@/firebase/config'
 import { Timestamp } from 'firebase/firestore'
+import { format } from 'date-fns'
+import type { PMWorkOrder } from '@/types/firestore'
 import OperationLogModal from './OperationLogModal'
 import OperationLogList from './OperationLogList'
 
@@ -150,6 +152,11 @@ function EnergyChart({ data }: { data: { day: string; value: number }[] }) {
     <div className="card p-4">
       <h3 className="text-sm font-semibold text-gray-200 mb-1">Điện — 7 ngày</h3>
       <p className="text-xs text-gray-500 mb-3">kWh tiêu thụ</p>
+      {data.length === 0 ? (
+        <div className="h-[300px] flex items-center justify-center text-gray-500 text-sm">
+          Chưa có dữ liệu điện
+        </div>
+      ) : (
       <ResponsiveContainer width="100%" height={300}>
         <BarChart data={data} margin={{ top: 2, right: 4, bottom: 0, left: -20 }}>
           <CartesianGrid strokeDasharray="2 2" stroke="rgba(255,255,255,0.06)" />
@@ -167,6 +174,7 @@ function EnergyChart({ data }: { data: { day: string; value: number }[] }) {
           </Bar>
         </BarChart>
       </ResponsiveContainer>
+      )}
     </div>
   )
 }
@@ -178,6 +186,11 @@ function WaterChart({ data }: { data: { day: string; value: number }[] }) {
     <div className="card p-4">
       <h3 className="text-sm font-semibold text-gray-200 mb-1">Nước — 7 ngày</h3>
       <p className="text-xs text-gray-500 mb-3">m³ tiêu thụ</p>
+      {data.length === 0 ? (
+        <div className="h-[300px] flex items-center justify-center text-gray-500 text-sm">
+          Chưa có dữ liệu nước
+        </div>
+      ) : (
       <ResponsiveContainer width="100%" height={300}>
         <LineChart data={data} margin={{ top: 2, right: 4, bottom: 0, left: -20 }}>
           <CartesianGrid strokeDasharray="2 2" stroke="rgba(255,255,255,0.06)" />
@@ -191,6 +204,7 @@ function WaterChart({ data }: { data: { day: string; value: number }[] }) {
           <Line type="monotone" dataKey="value" stroke="#60a5fa" strokeWidth={2} dot={false} />
         </LineChart>
       </ResponsiveContainer>
+      )}
     </div>
   )
 }
@@ -199,11 +213,13 @@ function WaterChart({ data }: { data: { day: string; value: number }[] }) {
 
 function HvacDetailModal({ unit, open, onClose }: { unit: HvacUnit | null; open: boolean; onClose: () => void }) {
   if (!unit) return null
-  const serviceHistory = [
-    { date: '2024-11-10', desc: 'Thay lọc gió định kỳ', tech: 'Nguyễn Văn A' },
-    { date: '2024-09-22', desc: 'Kiểm tra gas lạnh', tech: 'Trần Văn B' },
-    { date: '2024-07-05', desc: 'Vệ sinh dàn nóng', tech: 'Nguyễn Văn A' },
-  ]
+  const [serviceHistory, setServiceHistory] = useState<(PMWorkOrder & { id: string })[]>([])
+
+  useEffect(() => {
+    if (!unit?.id) return
+    const unsub = listenPmWorkOrdersByAsset(unit.id, setServiceHistory)
+    return unsub
+  }, [unit?.id])
 
   return (
     <Modal open={open} onClose={onClose} title={`HVAC — ${unit.name}`} size="lg">
@@ -236,15 +252,30 @@ function HvacDetailModal({ unit, open, onClose }: { unit: HvacUnit | null; open:
         <div>
           <h4 className="text-sm font-semibold text-gray-300 mb-2">Lịch sử bảo dưỡng</h4>
           <div className="space-y-2">
-            {serviceHistory.map((h, i) => (
-              <div key={i} className="flex items-start gap-3 text-sm">
-                <Clock className="w-3.5 h-3.5 text-gray-500 mt-0.5 shrink-0" />
-                <div className="flex-1">
-                  <p className="text-gray-300">{h.desc}</p>
-                  <p className="text-xs text-gray-500">{h.date} · {h.tech}</p>
+            {serviceHistory.length === 0 ? (
+              <p className="text-sm text-gray-600 text-center py-4">Chưa có lịch sử bảo trì</p>
+            ) : (
+              serviceHistory.map((h) => (
+                <div key={h.id} className="flex items-start gap-3 text-sm">
+                  <Clock className="w-3.5 h-3.5 text-gray-500 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-gray-300">{h.scheduleName}</p>
+                    <p className="text-xs text-gray-500">
+                      {h.completedAt
+                        ? format(h.completedAt.toDate(), 'dd/MM/yyyy')
+                        : h.dueDate
+                        ? format(h.dueDate.toDate(), 'dd/MM/yyyy')
+                        : '—'}
+                      {' · '}
+                      {h.assignedToName || '—'}
+                    </p>
+                  </div>
+                  <span className={`badge ${h.status === 'completed' ? 'badge-success' : h.status === 'overdue' ? 'badge-danger' : 'badge-warning'} text-xs shrink-0`}>
+                    {h.status}
+                  </span>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -256,11 +287,13 @@ function HvacDetailModal({ unit, open, onClose }: { unit: HvacUnit | null; open:
 
 function LiftDetailModal({ lift, open, onClose }: { lift: LiftUnit | null; open: boolean; onClose: () => void }) {
   if (!lift) return null
-  const maintHistory = [
-    { date: '2024-12-01', desc: 'Kiểm tra phanh an toàn', tech: 'Công ty Thăng Long' },
-    { date: '2024-10-15', desc: 'Bảo dưỡng định kỳ 6 tháng', tech: 'Công ty Thăng Long' },
-    { date: '2024-08-03', desc: 'Thay dây cáp', tech: 'Kỹ thuật viên Bệnh viện' },
-  ]
+  const [serviceHistory, setServiceHistory] = useState<(PMWorkOrder & { id: string })[]>([])
+
+  useEffect(() => {
+    if (!lift?.id) return
+    const unsub = listenPmWorkOrdersByAsset(lift.id, setServiceHistory)
+    return unsub
+  }, [lift?.id])
 
   return (
     <Modal open={open} onClose={onClose} title={`Thang máy — ${lift.name}`} size="lg">
@@ -293,15 +326,30 @@ function LiftDetailModal({ lift, open, onClose }: { lift: LiftUnit | null; open:
         <div>
           <h4 className="text-sm font-semibold text-gray-300 mb-2">Lịch sử bảo trì</h4>
           <div className="space-y-2">
-            {maintHistory.map((h, i) => (
-              <div key={i} className="flex items-start gap-3 text-sm">
-                <Clock className="w-3.5 h-3.5 text-gray-500 mt-0.5 shrink-0" />
-                <div className="flex-1">
-                  <p className="text-gray-300">{h.desc}</p>
-                  <p className="text-xs text-gray-500">{h.date} · {h.tech}</p>
+            {serviceHistory.length === 0 ? (
+              <p className="text-sm text-gray-600 text-center py-4">Chưa có lịch sử bảo trì</p>
+            ) : (
+              serviceHistory.map((h) => (
+                <div key={h.id} className="flex items-start gap-3 text-sm">
+                  <Clock className="w-3.5 h-3.5 text-gray-500 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-gray-300">{h.scheduleName}</p>
+                    <p className="text-xs text-gray-500">
+                      {h.completedAt
+                        ? format(h.completedAt.toDate(), 'dd/MM/yyyy')
+                        : h.dueDate
+                        ? format(h.dueDate.toDate(), 'dd/MM/yyyy')
+                        : '—'}
+                      {' · '}
+                      {h.assignedToName || '—'}
+                    </p>
+                  </div>
+                  <span className={`badge ${h.status === 'completed' ? 'badge-success' : h.status === 'overdue' ? 'badge-danger' : 'badge-warning'} text-xs shrink-0`}>
+                    {h.status}
+                  </span>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -465,11 +513,7 @@ export default function InfraPage() {
     const liftQ = query(collection(db, 'systemReadings'), where('type', '==', 'lift'))
     const unsub = onSnapshot(liftQ, (snap) => {
       if (snap.empty) {
-        setLiftData([
-          { id: 'lift-s1', name: 'Thang máy S1 — Khu A', floors: 'B1→T5', trips: 1284, status: 'ok' },
-          { id: 'lift-s2', name: 'Thang máy S2 — Khu B', floors: 'T1→T4', trips: 892, status: 'ok' },
-          { id: 'lift-s3', name: 'Thang máy S3 — Khu C', floors: 'T1→T3', trips: 0, status: 'warn' },
-        ])
+        setLiftData([])
       } else {
         setLiftData(snap.docs.map((d) => {
           const data = d.data()
@@ -502,11 +546,7 @@ export default function InfraPage() {
         )
       )
       if (energySnap.empty) {
-        setEnergyData([
-          { day: 'T2', value: 820 }, { day: 'T3', value: 910 }, { day: 'T4', value: 870 },
-          { day: 'T5', value: 950 }, { day: 'T6', value: 1020 }, { day: 'T7', value: 880 },
-          { day: 'CN', value: 740 },
-        ])
+        setEnergyData([])
       } else {
         setEnergyData(energySnap.docs.map((d, i) => ({
           day: days[i] ?? `D${i + 1}`,
@@ -524,11 +564,7 @@ export default function InfraPage() {
         )
       )
       if (waterSnap.empty) {
-        setWaterData([
-          { day: 'T2', value: 240 }, { day: 'T3', value: 265 }, { day: 'T4', value: 248 },
-          { day: 'T5', value: 280 }, { day: 'T6', value: 310 }, { day: 'T7', value: 258 },
-          { day: 'CN', value: 195 },
-        ])
+        setWaterData([])
       } else {
         setWaterData(waterSnap.docs.map((d, i) => ({
           day: days[i] ?? `D${i + 1}`,
@@ -753,9 +789,13 @@ export default function InfraPage() {
           </div>
           <div className="p-3">
             <div className="grid grid-cols-2 gap-3">
-              {liftData.map((l) => (
+              {liftData.length > 0 ? liftData.map((l) => (
                 <LiftCard key={l.id} lift={l} onClick={() => setSelectedLift(l)} />
-              ))}
+              )) : (
+                <div className="col-span-2 text-center py-6 text-gray-500 text-sm">
+                  Chưa có dữ liệu thang máy
+                </div>
+              )}
             </div>
           </div>
         </div>

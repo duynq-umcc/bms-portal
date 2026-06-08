@@ -98,6 +98,10 @@ export interface WorkOrder {
   cost?: number
   notes?: string
   attachments?: string[]
+  type?: 'corrective' | 'preventive' | 'emergency'
+  sourceIncident?: string   // incident ID if WO was created from an incident
+  sourcePm?: string        // pmSchedule ID if WO came from PM engine
+  closedAt?: Timestamp
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -306,6 +310,13 @@ export interface Vendor {
   contractStart?: Timestamp
   contractEnd?: Timestamp
   notes?: string
+  evaluation?: {
+    quality: number       // 0-5
+    response: number      // 0-5
+    price: number         // 0-5
+    reliability: number   // 0-5
+    documentation: number // 0-5
+  }
 }
 
 export interface Contract {
@@ -339,6 +350,10 @@ export interface Asset {
   assignedTo?: string
   notes?: string
   currentBookValue?: number
+  disposalRequestId?: string | null  // tracks pending disposal request
+  disposalStatus?: 'pending_review' | 'in_council' | 'executed' | 'approved' | null
+  disposedAt?: Timestamp | null
+  disposedValue?: number | null
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -612,6 +627,196 @@ export interface DisposalExecution {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// PCCC Monthly Inspection (legal requirement under NĐ 136/2020/NĐ-CP)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type PcccCheckCategory =
+  | 'extinguisher'
+  | 'detector'
+  | 'pump'
+  | 'exit'
+  | 'sprinkler'
+  | 'hydrant'
+  | 'panel'
+
+export type PcccCheckResult = 'ok' | 'fail' | 'na'
+
+export type PcccOverallResult = 'pass' | 'fail' | 'conditional'
+
+export interface PcccCheckItem {
+  id: string
+  category: PcccCheckCategory
+  label: string
+  location: string
+  result: PcccCheckResult
+  note: string
+}
+
+export interface PcccInspection {
+  id: string
+  month: string                // "YYYY-MM"
+  inspectedAt: Timestamp
+  inspectorId: string
+  inspectorName: string
+  locationNotes: string
+  checklist: PcccCheckItem[]
+  overallResult: PcccOverallResult
+  failedItems: number
+  naItems: number
+  notes: string
+  signatureUrl?: string
+  createdAt: Timestamp
+}
+
+export const DEFAULT_PCCC_CHECKLIST: Omit<PcccCheckItem, 'result' | 'note'>[] = [
+  { id: 'ext-1', category: 'extinguisher', label: 'Bình chữa cháy xách tay', location: 'Toàn tòa nhà' },
+  { id: 'ext-2', category: 'extinguisher', label: 'Bình CO₂', location: 'Phòng máy chủ / kho hóa chất' },
+  { id: 'det-1', category: 'detector', label: 'Đầu báo khói', location: 'Tầng 1–5' },
+  { id: 'det-2', category: 'detector', label: 'Đầu báo nhiệt', location: 'Bếp / Kho' },
+  { id: 'pump-1', category: 'pump', label: 'Bơm chữa cháy chính (điện)', location: 'Phòng bơm tầng hầm' },
+  { id: 'pump-2', category: 'pump', label: 'Bơm dự phòng (diesel)', location: 'Phòng bơm tầng hầm' },
+  { id: 'pump-3', category: 'pump', label: 'Bơm bù áp (jockey)', location: 'Phòng bơm tầng hầm' },
+  { id: 'exit-1', category: 'exit', label: 'Đèn exit & đèn sự cố', location: 'Lối thoát hiểm tất cả tầng' },
+  { id: 'exit-2', category: 'exit', label: 'Lối thoát hiểm — thông thoáng', location: 'Toàn tòa nhà' },
+  { id: 'exit-3', category: 'exit', label: 'Cửa chống cháy', location: 'Cầu thang bộ' },
+  { id: 'spr-1', category: 'sprinkler', label: 'Đầu phun Sprinkler — không bị che chắn', location: 'Toàn tòa nhà' },
+  { id: 'hyd-1', category: 'hydrant', label: 'Hộp họng chữa cháy vách tường', location: 'Mỗi tầng' },
+  { id: 'panel-1', category: 'panel', label: 'Tủ điều khiển PCCC — không báo lỗi', location: 'Phòng trực bảo vệ' },
+]
+
+// ──────────────────────────────────────────────────────────────────────────────
+// WWTP Daily Log (QCVN 28:2010 compliant)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type WwtpShift = 'morning' | 'afternoon' | 'night'
+export type WwtpOverallStatus = 'compliant' | 'non_compliant' | 'marginal'
+
+export interface WwtpChemicalUsed {
+  name: string
+  quantity: number
+  unit: string
+}
+
+export interface WwtpReadings {
+  inflowVolume: number
+  outflowVolume: number
+  ph: number
+  bod5: number
+  cod: number
+  tss: number
+  coliform: number
+  chlorineResidual: number
+  dissolvedOxygen: number
+}
+
+export interface WwtpLog {
+  id: string
+  logDate: Timestamp
+  shift: WwtpShift
+  operatorId: string
+  operatorName: string
+  readings: WwtpReadings
+  chemicalUsed: WwtpChemicalUsed[]
+  issues: string
+  overallStatus: WwtpOverallStatus
+  createdAt: Timestamp
+}
+
+export const QCVN28_LIMITS = {
+  ph: { min: 6, max: 9 },
+  bod5: { max: 50 },
+  cod: { max: 100 },
+  tss: { max: 100 },
+  coliform: { max: 5000 },
+  chlorineResidual: { min: 0.5, max: 1.5 },
+  dissolvedOxygen: { min: 2 },
+} as const
+
+export function computeWwtpStatus(readings: WwtpReadings): WwtpOverallStatus {
+  const checks: { value: number; limit: { max?: number; min?: number }; name: string }[] = [
+    { value: readings.ph, limit: { min: QCVN28_LIMITS.ph.min, max: QCVN28_LIMITS.ph.max }, name: 'pH' },
+    { value: readings.bod5, limit: { max: QCVN28_LIMITS.bod5.max }, name: 'BOD5' },
+    { value: readings.cod, limit: { max: QCVN28_LIMITS.cod.max }, name: 'COD' },
+    { value: readings.tss, limit: { max: QCVN28_LIMITS.tss.max }, name: 'TSS' },
+    { value: readings.coliform, limit: { max: QCVN28_LIMITS.coliform.max }, name: 'Coliform' },
+  ]
+  const marginals: string[] = []
+  const violations: string[] = []
+  for (const c of checks) {
+    if (c.limit.max !== undefined) {
+      if (c.value > c.limit.max) violations.push(c.name)
+      else if (c.value > c.limit.max * 0.8) marginals.push(c.name)
+    }
+    if (c.limit.min !== undefined) {
+      if (c.value < c.limit.min) violations.push(c.name)
+    }
+  }
+  if (violations.length > 0) return 'non_compliant'
+  if (marginals.length > 0) return 'marginal'
+  return 'compliant'
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Medical Waste Log (Nhật ký chất thải y tế)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface MedicalWaste {
+  groupB: number    // kg — Chất thải lây nhiễm (túi đỏ)
+  groupC: number    // kg — Chất thải hóa học (túi đen)
+  groupD: number    // kg — Chất thải sắc nhọn (hộp vàng)
+  groupE: number    // kg — Chất thải thông thường (túi xanh)
+}
+
+export interface MedicalWasteLog {
+  id: string
+  logDate: Timestamp
+  recordedBy: string
+  recordedByName: string
+  waste: MedicalWaste
+  collectedBy: string
+  collectionReceiptNo: string
+  storageLocation: string
+  notes: string
+  createdAt: Timestamp
+}
+
+export interface PestControlLog {
+  id: string
+  date: Timestamp
+  contractorId: string
+  contractorName: string
+  areas: string[]
+  chemicalUsed: string
+  method: 'spray' | 'trap' | 'bait' | 'fumigation' | 'other'
+  certificateNumber?: string
+  nextScheduledDate?: Timestamp
+  operatorName: string
+  notes?: string
+  createdAt: Timestamp
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Radiation Permits (Cục ATBX&HN — Bộ Y tế)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type RadiationPermitStatus = 'valid' | 'expiring_soon' | 'expired'
+
+export interface RadiationPermit {
+  id: string
+  equipmentName: string
+  equipmentCode: string
+  permitNumber: string
+  issuedBy: string
+  issuedDate: Timestamp
+  expiryDate: Timestamp
+  licenseFileUrl: string
+  safetyOfficer: string
+  status: RadiationPermitStatus
+  alertSentAt?: Timestamp | null
+  createdAt: Timestamp
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Meta
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -659,6 +864,7 @@ export interface CalibrationSchedule {
   lastCalibrationDate?: Timestamp
   nextCalibrationDate?: Timestamp
   certNumber?: string
+  certFileUrl?: string
   status: 'pending' | 'overdue' | 'completed'
   notes?: string
 }
@@ -721,6 +927,17 @@ export interface WasteLogEntry {
   processor: string
   certificate?: string
   notes?: string
+  // Medical hazardous specific
+  generatorFacility?: string
+  wasteManifestNumber?: string
+  wasteLicenseNumber?: string
+  treatmentMethod?: string
+  // General waste specific
+  volumeEstimate?: number
+  disposalContractor?: string
+  // Recyclable specific
+  recyclerName?: string
+  recyclingCertificateNumber?: string
 }
 
 export interface BuildingInspection {
@@ -897,6 +1114,7 @@ export interface PMExecutionLog {
   woCreated: number
   overdueMarked: number
   details: string[]
+  idempotencyKey?: string  // P3.2: set of checked schedule IDs for deduplication
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1038,3 +1256,149 @@ export interface TechnicianKpi {
   calculatedAt: Timestamp
   previousPeriodScore: number | null
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 5S Checklist Logs (P3.4)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type FiveSArea = 'sort' | 'set' | 'shine' | 'standardize' | 'sustain'
+export type FiveSScore = 0 | 1 | 2 | 3 | 4 | 5
+
+export interface FiveSCheckItem {
+  id: string
+  area: FiveSArea
+  label: string
+  score: FiveSScore
+  note: string
+}
+
+export interface FiveSLog {
+  id: string
+  checkDate: Timestamp
+  area: string          // e.g. "Phòng Server A", "Kho vật tư"
+  inspectorId: string
+  inspectorName: string
+  items: FiveSCheckItem[]
+  overallScore: number  // average across all items, 0-100
+  passed: number        // items scored >= 3
+  failed: number        // items scored < 3
+  photos?: string[]
+  notes: string
+  createdAt?: Timestamp
+}
+
+export const FIVE_S_AREAS: { value: FiveSArea; label: string; vi: string; color: string }[] = [
+  { value: 'sort', label: 'Sort', vi: 'Ngăn chặn (Seiri)', color: 'bg-red-500/15 text-red-400' },
+  { value: 'set', label: 'Set', vi: 'Sắp xếp (Seiton)', color: 'bg-amber/15 text-amber' },
+  { value: 'shine', label: 'Shine', vi: 'Sạch sẽ (Seiso)', color: 'bg-green-500/15 text-green-400' },
+  { value: 'standardize', label: 'Standardize', vi: 'Chuẩn hóa (Seiketsu)', color: 'bg-blue-500/15 text-blue-400' },
+  { value: 'sustain', label: 'Sustain', vi: 'Duy trì (Shitsuke)', color: 'bg-purple-500/15 text-purple-400' },
+]
+
+export const DEFAULT_FIVE_S_ITEMS: Omit<FiveSCheckItem, 'score' | 'note'>[] = [
+  // Sort
+  { id: 's1', area: 'sort', label: 'Không có vật dụng không cần thiết trong khu vực' },
+  { id: 's2', area: 'sort', label: 'Đã phân loại và loại bỏ vật phẩm hỏng/lỗi thời' },
+  { id: 's3', area: 'sort', label: 'Khu vực làm việc chỉ chứa vật dụng cần thiết cho công việc' },
+  // Set
+  { id: 'st1', area: 'set', label: 'Mọi vật dụng có vị trí cố định, dễ tìm' },
+  { id: 'st2', area: 'set', label: 'Nhãn mác, biển báo rõ ràng, dễ nhận biết' },
+  { id: 'st3', area: 'set', label: 'Dụng cụ/thiết bị được sắp xếp gọn gàng' },
+  // Shine
+  { id: 'sh1', area: 'shine', label: 'Sàn, tường, bề mặt làm việc sạch sẽ' },
+  { id: 'sh2', area: 'shine', label: 'Thiết bị được vệ sinh, không bụi bẩn' },
+  { id: 'sh3', area: 'shine', label: 'Không có rác thải, dầu mỡ trên sàn' },
+  // Standardize
+  { id: 'sd1', area: 'standardize', label: 'Quy trình vệ sinh/kiểm tra được tuân thủ' },
+  { id: 'sd2', area: 'standardize', label: 'Tiêu chuẩn 5S được treo công khai tại khu vực' },
+  { id: 'sd3', area: 'standardize', label: 'Phân công trách nhiệm rõ ràng cho từng khu vực' },
+  // Sustain
+  { id: 'su1', area: 'sustain', label: 'Nhân viên tuân thủ nguyên tắc 5S hàng ngày' },
+  { id: 'su2', area: 'sustain', label: 'Có buổi kiểm tra/audit 5S định kỳ' },
+  { id: 'su3', area: 'sustain', label: 'Có kế hoạch cải tiến từ kết quả kiểm tra trước' },
+]
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Civil Patrol Logs (P3.5)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type PatrolFindingSeverity = 'info' | 'warning' | 'critical'
+
+export interface PatrolFinding {
+  id: string
+  category: string      // 'structural', 'safety', 'electrical', 'plumbing', 'fire', 'other'
+  location: string
+  description: string
+  severity: PatrolFindingSeverity
+  actionRequired: string
+  photos?: string[]
+}
+
+export interface PatrolLog {
+  id: string
+  patrolDate: Timestamp
+  patrolArea: string    // e.g. "Tầng 1-5", "Khu vực hành chính"
+  patrolType: 'routine' | 'incident_followup' | 'post_incident' | 'special'
+  inspectorId: string
+  inspectorName: string
+  findings: PatrolFinding[]
+  findingCount: number
+  criticalFindings: number
+  resolvedFindings: number
+  notes: string
+  createdAt?: Timestamp
+}
+
+export const PATROL_CATEGORIES = [
+  { value: 'structural', label: 'Kết cấu xây dựng' },
+  { value: 'safety', label: 'An toàn lao động' },
+  { value: 'electrical', label: 'Điện' },
+  { value: 'plumbing', label: 'Cấp thoát nước' },
+  { value: 'fire', label: 'PCCC' },
+  { value: 'other', label: 'Khác' },
+]
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Training Records (P3.6)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type TrainingType = 'safety' | 'technical' | 'compliance' | 'orientation' | 'refresher' | 'emergency'
+
+export interface TrainingAttendee {
+  uid: string
+  name: string
+  department: string
+  present: boolean
+  signature?: string
+}
+
+export interface TrainingRecord {
+  id: string
+  sessionTitle: string
+  sessionDate: Timestamp
+  endDate?: Timestamp
+  location: string
+  type: TrainingType
+  instructorName: string
+  instructorOrg?: string
+  durationHours: number
+  attendees: TrainingAttendee[]
+  totalAttendees: number
+  presentCount: number
+  certificateIssued: boolean
+  certificateNumber?: string
+  topics: string[]
+  materials?: string[]    // URLs to training materials
+  evaluationScore?: number  // average score if tested
+  notes: string
+  createdAt?: Timestamp
+}
+
+export const TRAINING_TYPES: { value: TrainingType; label: string }[] = [
+  { value: 'safety', label: 'An toàn lao động' },
+  { value: 'technical', label: 'Kỹ thuật chuyên môn' },
+  { value: 'compliance', label: 'Tuân thủ pháp luật' },
+  { value: 'orientation', label: 'Đào tạo định hướng' },
+  { value: 'refresher', label: 'Bồi dưỡng định kỳ' },
+  { value: 'emergency', label: 'Ứng phó khẩn cấp' },
+]

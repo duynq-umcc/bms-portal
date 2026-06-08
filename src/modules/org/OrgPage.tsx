@@ -238,36 +238,50 @@ export default function OrgPage() {
             </button>
             {(!expandedDepts.has(`${level}-${deptKey}`) || level === 0) && (
               <div className="flex flex-wrap gap-2">
-                {members.map((s) => (
-                  <button
-                    key={s.uid}
-                    onClick={() => setSelectedStaff(s)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all hover:scale-[1.02] hover:shadow-md ${color} bg-white/5 border-white/10 hover:bg-white/10 cursor-pointer text-left min-w-[140px]`}
-                  >
-                    <Avatar name={s.displayName || ''} dept={s.dept} size="sm" />
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold text-gray-100 truncate">{s.displayName}</p>
-                      <p className="text-[10px] text-t3 truncate">{s.position}</p>
-                    </div>
-                  </button>
-                ))}
+                {members.map((s) => {
+                  const kpi = kpiMap[s.uid]
+                  const woCount = kpi?.woStats?.totalAssigned ?? null
+                  return (
+                    <button
+                      key={s.uid}
+                      onClick={() => setSelectedStaff(s)}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all hover:scale-[1.02] hover:shadow-md ${color} bg-white/5 border-white/10 hover:bg-white/10 cursor-pointer text-left min-w-[140px]`}
+                    >
+                      <Avatar name={s.displayName || ''} dept={s.dept} size="sm" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-gray-100 truncate">{s.displayName}</p>
+                        <p className="text-[10px] text-t3 truncate">{s.position}</p>
+                        {woCount !== null && (
+                          <p className="text-[9px] text-amber/70">WO tháng: {woCount}</p>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             )}
             {expandedDepts.has(`${level}-${deptKey}`) && level > 0 && (
               <div className="ml-4 pl-4 border-l border-white/10 space-y-2 mt-2">
-                {members.map((s) => (
-                  <button
-                    key={s.uid}
-                    onClick={() => setSelectedStaff(s)}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-white/5 hover:bg-white/10 transition-all w-full text-left"
-                  >
-                    <Avatar name={s.displayName || ''} dept={s.dept} size="sm" />
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-gray-200 truncate">{s.displayName}</p>
-                      <p className="text-[10px] text-t3 truncate">{s.position}</p>
-                    </div>
-                  </button>
-                ))}
+                {members.map((s) => {
+                  const kpi = kpiMap[s.uid]
+                  const woCount = kpi?.woStats?.totalAssigned ?? null
+                  return (
+                    <button
+                      key={s.uid}
+                      onClick={() => setSelectedStaff(s)}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-white/5 hover:bg-white/10 transition-all w-full text-left"
+                    >
+                      <Avatar name={s.displayName || ''} dept={s.dept} size="sm" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-gray-200 truncate">{s.displayName}</p>
+                        <p className="text-[10px] text-t3 truncate">{s.position}</p>
+                        {woCount !== null && (
+                          <p className="text-[9px] text-amber/70">WO: {woCount}</p>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>

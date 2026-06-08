@@ -1,32 +1,34 @@
 import { useState, useEffect } from 'react'
 import { listenReports, listenWorkOrders, listenIncidents } from '@/firebase/db'
-import { collection, query, where, onSnapshot } from 'firebase/firestore'
-import { db } from '@/firebase/config'
 import type { Report, WorkOrder, Incident } from '@/firebase/types'
 import type { TechnicianKpi } from '@/types/firestore'
+import { Timestamp } from 'firebase/firestore'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  PieChart, Pie, Cell, Legend, LineChart, Line, ReferenceLine,
+  PieChart, Pie, Cell, Legend, LineChart, Line,
 } from 'recharts'
 import { TableSkeleton } from '@/components/ui/Table'
 import { toast } from '@/components/ui/Toast'
 import { KpiDetailPanel } from '@/components/kpi/KpiDetailPanel'
 import {
   TrendingUp, Printer, Download, CheckCircle, AlertTriangle,
-  Activity, BarChart3, PieChart as PieChartIcon, Users,
+  Activity, BarChart3, PieChart as PieChartIcon,
+  Trophy, FilePlus,
 } from 'lucide-react'
+import {
+  startOfMonth, endOfMonth,
+  startOfQuarter, endOfQuarter,
+  startOfYear, endOfYear,
+} from 'date-fns'
+import { useAuth } from '@/contexts/AuthContext'
+import BGDReportModal from './components/BGDReportModal'
+import { useGetTechnicianKpis, useGetMyKpi } from './hooks/useTechnicianKpis'
+import MyKpiCard from './components/MyKpiCard'
+import KpiLeaderboard from './components/KpiLeaderboard'
 
-type Tab = 'month' | 'quarter' | 'year'
+type Tab = 'month' | 'quarter' | 'year' | 'kpi'
 
 const COLORS = ['#f59e0b', '#3b82f6', '#16a34a', '#ef4444', '#8b5cf6', '#06b6d4']
-
-const GRADE_CHART_COLOR: Record<string, string> = {
-  A: '#16a34a',
-  B: '#0d9488',
-  C: '#d97706',
-  D: '#ea580c',
-  F: '#dc2626',
-}
 
 function formatVND(n: number) {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)} tỷ`
@@ -109,37 +111,6 @@ function exportToExcel(report: Report, _workOrders: WorkOrder[], _incidents: Inc
   }
 }
 
-function exportKpiToExcel(kpis: TechnicianKpi[]) {
-  try {
-    const BOM = '﻿'
-    const header = [
-      'STT', 'Nhân viên', 'Phòng ban', 'Điểm KPI', 'Xếp loại',
-      'Xu hướng', 'WO Giao', 'WO Hoàn thành', 'Tỷ lệ WO%',
-      'Đúng hạn', 'TG PH (phút)', 'PM Lịch', 'PM Hoàn thành',
-      'Tổng sự cố', 'Tái phát', 'Tái phát%',
-    ]
-    const rows = kpis.map((k, i) => [
-      i + 1, k.name, k.department || k.role, k.score, k.grade,
-      k.trend, k.woStats.totalAssigned, k.woStats.totalCompleted,
-      k.woStats.completionRate, k.woStats.onTimeRate,
-      k.responseStats.avgResponseMinutes, k.pmStats.pmScheduled,
-      k.pmStats.pmCompleted, k.incidentStats.totalIncidentsReported,
-      k.incidentStats.recurringIncidents, k.incidentStats.recurringRate,
-    ])
-    const csv = [header, ...rows].map((r) => r.join(',')).join('\n')
-    const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `KPI-nhan-vien-${new Date().toISOString().slice(0, 7)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-    toast.success('Đã xuất KPI nhân viên')
-  } catch {
-    toast.error('Xuất thất bại')
-  }
-}
-
 function exportWorkOrdersToExcel(workOrders: WorkOrder[]) {
   const csv = [
     ['STT', 'Tiêu đề', 'Mô tả', 'Hệ thống', 'Vị trí', 'Ưu tiên', 'Trạng thái', 'Ngày tạo'],
@@ -151,7 +122,7 @@ function exportWorkOrdersToExcel(workOrders: WorkOrder[]) {
       wo.location,
       wo.priority,
       wo.status,
-      wo.createdAt ? new Date((wo.createdAt as any).toDate()).toLocaleDateString('vi-VN') : '',
+      wo.createdAt ? new Date((wo.createdAt as Timestamp).toDate()).toLocaleDateString('vi-VN') : '',
     ]),
   ]
   const BOM = '﻿'
@@ -166,13 +137,26 @@ function exportWorkOrdersToExcel(workOrders: WorkOrder[]) {
 }
 
 export default function ReportsPage() {
+  const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('month')
+  const [kpiPeriod, setKpiPeriod] = useState(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
   const [reports, setReports] = useState<Report[]>([])
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([])
   const [incidents, setIncidents] = useState<Incident[]>([])
-  const [kpis, setKpis] = useState<TechnicianKpi[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedKpi, setSelectedKpi] = useState<TechnicianKpi | null>(null)
+  const [showBgdModal, setShowBgdModal] = useState(false)
+
+  const { kpis, loading: kpiLoading } = useGetTechnicianKpis(kpiPeriod)
+  const { kpi: myKpi, loading: myKpiLoading } = useGetMyKpi(kpiPeriod, user?.uid ?? '')
+
+  const kpiMonthLabel = (() => {
+    const [y, m] = kpiPeriod.split('-').map(Number)
+    return `${m.toString().padStart(2, '0')}/${y}`
+  })()
 
   useEffect(() => {
     const unsub1 = listenReports(setReports)
@@ -182,18 +166,6 @@ export default function ReportsPage() {
     return () => { unsub1(); unsub2(); unsub3(); clearTimeout(timer) }
   }, [])
 
-  // Subscribe to technician KPIs
-  useEffect(() => {
-    const now = new Date()
-    const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-    const unsub = onSnapshot(
-      query(collection(db, 'technicianKpi'), where('period', '==', period)),
-      (snap) => {
-        setKpis(snap.docs.map((d) => d.data() as TechnicianKpi))
-      },
-    )
-    return unsub
-  }, [])
 
   if (loading) return <div className="space-y-4"><TableSkeleton rows={8} /></div>
 
@@ -201,6 +173,29 @@ export default function ReportsPage() {
   const today = new Date()
   const year = latest?.year || today.getFullYear()
   const month = latest?.month || `${today.getMonth() + 1}`
+
+  // Period boundaries based on active tab
+  const periodBounds = (() => {
+    const now = today
+    if (tab === 'month') return { start: startOfMonth(now), end: endOfMonth(now) }
+    if (tab === 'quarter') return { start: startOfQuarter(now), end: endOfQuarter(now) }
+    return { start: startOfYear(now), end: endOfYear(now) }
+  })()
+
+  const inPeriod = (ts: Timestamp | undefined) => {
+    if (!ts) return false
+    try {
+      const d = ts.toDate()
+      return d >= periodBounds.start && d <= periodBounds.end
+    } catch { return false }
+  }
+
+  // Filter reports and work orders to the active period
+  const periodReports = reports.filter((r) => r.createdAt && inPeriod(r.createdAt))
+  const periodReport = periodReports[0]
+  const periodWos = workOrders.filter((wo) => inPeriod(wo.createdAt))
+  const periodIncidents = incidents.filter((i) => inPeriod(i.createdAt))
+
 
   // Aggregate data for charts
   const costCategories = latest ? [
@@ -213,16 +208,16 @@ export default function ReportsPage() {
 
   const totalCost = latest ? Object.values(latest.costs).reduce((s, v) => s + (v || 0), 0) : 0
 
-  // Work order analytics
-  const woByCategory = workOrders.reduce<Record<string, number>>((acc, wo) => {
+  // Work order analytics — using period-filtered data
+  const woByCategory = periodWos.reduce<Record<string, number>>((acc, wo) => {
     acc[wo.system] = (acc[wo.system] || 0) + 1
     return acc
   }, {})
   const pieData = Object.entries(woByCategory).map(([name, value]) => ({ name, value }))
 
   const woByMonth: Record<string, { open: number; closed: number }> = {}
-  workOrders.forEach((wo) => {
-    const d = wo.createdAt ? new Date((wo.createdAt as any).toDate()) : new Date()
+  periodWos.forEach((wo) => {
+    const d = wo.createdAt ? new Date(wo.createdAt.toDate()) : new Date()
     const key = `${d.getMonth() + 1}/${d.getFullYear()}`
     if (!woByMonth[key]) woByMonth[key] = { open: 0, closed: 0 }
     if (wo.status === 'completed') woByMonth[key].closed++
@@ -237,47 +232,43 @@ export default function ReportsPage() {
     .slice(-6)
     .map(([label, vals]) => ({ label, ...vals }))
 
-  // System uptime from incidents
+  // System uptime from corrective work orders in period (MTTR = real data)
   const systems = ['HVAC', 'Điện', 'Nước', 'O2', 'Internet', 'PCCC']
+  const periodStart = periodBounds.start
+  const periodEnd = periodBounds.end
+  const totalHours = (periodEnd.getTime() - periodStart.getTime()) / 3_600_000
+
   const uptimeData = systems.map((sys) => {
-    const sysIncidents = incidents.filter((i) => i.location?.toLowerCase().includes(sys.toLowerCase()))
-    const recentIncidents = sysIncidents.filter((i) => {
-      if (!i.createdAt) return false
-      const d = (i.createdAt as any).toDate()
-      return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear()
-    })
-    const mttr = recentIncidents.length > 0 ? (recentIncidents.reduce((s, i) => {
-      if (!i.createdAt || !i.resolvedAt) return s
-      return s + ((i.resolvedAt as any).toDate().getTime() - (i.createdAt as any).toDate().getTime()) / 3_600_000
-    }, 0) / recentIncidents.length) : 0
-    const uptime = recentIncidents.length > 0
-      ? Math.max(99, Math.min(100, 100 - recentIncidents.length * 0.1))
+    const sysWos = periodWos.filter(
+      (wo) =>
+        wo.type === 'corrective' &&
+        wo.location?.toLowerCase().includes(sys.toLowerCase())
+    )
+    const closedWos = sysWos.filter((wo) => wo.status === 'completed' && wo.closedAt && wo.createdAt)
+    const totalDowntime = closedWos.reduce((s, wo) => {
+      try {
+        return s + ((wo.closedAt as Timestamp).toDate().getTime() - (wo.createdAt as Timestamp).toDate().getTime())
+      } catch { return s }
+    }, 0) / 3_600_000
+    const mttr = closedWos.length > 0 ? totalDowntime / closedWos.length : 0
+    const uptime = totalHours > 0
+      ? Math.max(0, Math.min(100, (1 - totalDowntime / totalHours) * 100))
       : 100
-    return { system: sys, uptime: Number(uptime.toFixed(2)), incidents: recentIncidents.length, mttr: Number(mttr.toFixed(1)) }
+    return {
+      system: sys,
+      uptime: Number(uptime.toFixed(2)),
+      incidents: sysWos.length,
+      mttr: Number(mttr.toFixed(1)),
+    }
   })
 
-  // Team KPI summary
-  const avgScore = kpis.length > 0 ? Math.round(kpis.reduce((s, k) => s + k.score, 0) / kpis.length) : 0
-  const avgWoComp = kpis.length > 0 ? Math.round(kpis.reduce((s, k) => s + k.woStats.completionRate, 0) / kpis.length) : 0
-  const avgResp = kpis.length > 0 ? Math.round(kpis.reduce((s, k) => s + k.responseStats.avgResponseMinutes, 0) / kpis.length) : 0
-  const avgPmRate = kpis.length > 0 ? Math.round(kpis.reduce((s, k) => s + k.pmStats.pmCompletionRate, 0) / kpis.length) : 0
 
-  // KPI bar chart data
-  const scoreChartData = [...kpis]
-    .sort((a, b) => b.score - a.score)
-    .map((k) => ({
-      name: k.name.split(' ').slice(-1)[0] || k.name,
-      score: k.score,
-      grade: k.grade,
-      color: GRADE_CHART_COLOR[k.grade] ?? '#dc2626',
-    }))
-
-  const kpiData = latest ? [
-    { label: 'Uptime hệ thống kỹ thuật', actual: latest.kpis.uptime, target: 99 },
-    { label: 'TTBYT hoạt động đúng hẹn', actual: latest.kpis.deviceOnTime || 98, target: 98 },
-    { label: 'Work orders hoàn thành đúng hạn', actual: latest.kpis.workOrderOnTime || 95, target: 95 },
-    { label: 'Độ chính xác tồn kho', actual: latest.kpis.inventoryAccuracy || 99, target: 99 },
-    { label: 'PCCC không có sự cố', actual: latest.kpis.fireIncidents || 100, target: 100 },
+  const kpiData = periodReport ? [
+    { label: 'Uptime hệ thống kỹ thuật', actual: periodReport.kpis.uptime, target: 99 },
+    { label: 'TTBYT hoạt động đúng hẹn', actual: periodReport.kpis.deviceOnTime || 98, target: 98 },
+    { label: 'Work orders hoàn thành đúng hạn', actual: periodReport.kpis.workOrderOnTime || 95, target: 95 },
+    { label: 'Độ chính xác tồn kho', actual: periodReport.kpis.inventoryAccuracy || 99, target: 99 },
+    { label: 'PCCC không có sự cố', actual: periodReport.kpis.fireIncidents || 100, target: 100 },
   ] : []
 
   return (
@@ -290,6 +281,12 @@ export default function ReportsPage() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setShowBgdModal(true)}
+            className="btn-primary flex items-center gap-1.5 text-xs"
+          >
+            <FilePlus className="w-3.5 h-3.5" /> Lập báo cáo BGĐ
+          </button>
           {latest && (
             <>
               <button
@@ -306,14 +303,6 @@ export default function ReportsPage() {
               </button>
             </>
           )}
-          {kpis.length > 0 && (
-            <button
-              onClick={() => exportKpiToExcel(kpis)}
-              className="btn-secondary flex items-center gap-1.5 text-xs"
-            >
-              <Download className="w-3.5 h-3.5" /> Xuất KPI nhân viên
-            </button>
-          )}
           <button
             onClick={() => exportWorkOrdersToExcel(workOrders)}
             className="btn-secondary flex items-center gap-1.5 text-xs"
@@ -324,25 +313,79 @@ export default function ReportsPage() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-1 bg-white/[0.03] rounded-xl p-1 max-w-xs">
+      <div className="flex gap-1 bg-white/[0.03] rounded-xl p-1 max-w-md">
         {([
           { key: 'month' as Tab, label: 'Tháng' },
           { key: 'quarter' as Tab, label: 'Quý' },
           { key: 'year' as Tab, label: 'Năm' },
+          { key: 'kpi' as Tab, label: 'KPI KTV', icon: Trophy },
         ]).map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
               tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-t2 hover:text-gray-200'
             }`}
           >
+            {t.icon && <t.icon className="w-3.5 h-3.5" />}
             {t.label}
           </button>
         ))}
       </div>
 
-      {latest ? (
+      {/* ── KPI KTV tab ── */}
+      {tab === 'kpi' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="text-base font-bold text-gray-100">KPI Kỹ thuật viên</h2>
+              <p className="text-xs text-t3">
+                {kpiMonthLabel} · {kpis.length} nhân viên
+              </p>
+            </div>
+            {/* Month picker */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  const [y, m] = kpiPeriod.split('-').map(Number)
+                  const d = new Date(y, m - 2, 1)
+                  setKpiPeriod(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+                }}
+                className="btn-secondary text-xs px-2 py-1"
+              >
+                ← Tháng trước
+              </button>
+              <span className="flex items-center text-xs text-gray-300 font-medium px-2 py-1 bg-white/5 rounded-lg">
+                {kpiMonthLabel}
+              </span>
+              <button
+                onClick={() => {
+                  const [y, m] = kpiPeriod.split('-').map(Number)
+                  const d = new Date(y, m, 1)
+                  setKpiPeriod(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+                }}
+                className="btn-secondary text-xs px-2 py-1"
+              >
+                Tháng sau →
+              </button>
+            </div>
+          </div>
+
+          {/* My KPI card — full width */}
+          <MyKpiCard kpi={myKpi} loading={myKpiLoading} monthLabel={kpiMonthLabel} />
+
+          {/* Leaderboard */}
+          <KpiLeaderboard
+            kpis={kpis}
+            loading={kpiLoading}
+            month={kpiPeriod}
+            currentUserUid={user?.uid}
+            onSelectKpi={setSelectedKpi}
+          />
+        </div>
+      )}
+
+      {tab !== 'kpi' && latest ? (
         <>
           {/* Section 1: KPI Progress Bars */}
           <div className="card p-4">
@@ -356,8 +399,8 @@ export default function ReportsPage() {
               ))}
             </div>
             <div className="mt-4 pt-3 border-t border-white/[0.07] flex justify-between text-sm">
-              <span className="text-t2">Sự cố tháng này</span>
-              <span className="font-semibold text-red-400">{incidents.length} sự cố</span>
+              <span className="text-t2">Sự cố kỳ này</span>
+              <span className="font-semibold text-red-400">{periodIncidents.length} sự cố</span>
             </div>
           </div>
 
@@ -426,7 +469,9 @@ export default function ReportsPage() {
           {/* Work order trend */}
           {trendData.length > 0 && (
             <div className="card p-4">
-              <h3 className="font-semibold text-gray-100 text-sm mb-4">Xu hướng Work Orders (6 tháng gần nhất)</h3>
+              <h3 className="font-semibold text-gray-100 text-sm mb-4">
+                Xu hướng Work Orders {tab === 'month' ? 'tháng' : tab === 'quarter' ? 'quý' : 'năm'} này
+              </h3>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={trendData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
@@ -496,124 +541,16 @@ export default function ReportsPage() {
         </div>
       )}
 
-      {/* ── KPI Staff section ── */}
-      {kpis.length > 0 && (
-        <>
-          {/* Team summary */}
-          <div className="card p-4">
-            <h3 className="font-semibold text-gray-100 text-sm mb-4 flex items-center gap-2">
-              <Users className="w-4 h-4 text-amber" />
-              Hiệu suất nhân viên kỹ thuật
-            </h3>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-              {[
-                { label: 'TB WO hoàn thành', value: `${avgWoComp}%`, color: 'text-amber' },
-                { label: 'TB TG phản hồi', value: avgResp > 0 ? `${avgResp} phút` : '—', color: 'text-blue-400' },
-                { label: 'TB PM hoàn thành', value: `${avgPmRate}%`, color: 'text-green-400' },
-                { label: 'Điểm trung bình', value: `${avgScore}`, color: 'text-purple-400' },
-              ].map((s) => (
-                <div key={s.label} className="bg-white/[0.04] rounded-xl p-3 text-center">
-                  <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
-                  <p className="text-xs text-t3 mt-1">{s.label}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Score bar chart */}
-            {scoreChartData.length > 0 && (
-              <div>
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={scoreChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                    <XAxis dataKey="name" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                    <Tooltip
-                      formatter={(v) => [`${v} điểm`, 'KPI']}
-                      contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                      labelFormatter={(l) => scoreChartData.find((d) => d.name === l)?.name ?? l}
-                    />
-                    <Bar dataKey="score" radius={[4, 4, 0, 0]}>
-                      {scoreChartData.map((entry, i) => (
-                        <Cell key={i} fill={entry.color} />
-                      ))}
-                    </Bar>
-                    {/* B grade threshold line at 75 */}
-                    <ReferenceLine y={75} stroke="rgba(255,255,255,0.15)" strokeDasharray="3 3" label={{ value: 'B', position: 'right', fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </div>
-
-          {/* Detailed staff table */}
-          <div className="card overflow-hidden">
-            <div className="px-4 py-3 border-b border-white/[0.07]">
-              <h3 className="font-semibold text-gray-100 text-sm">Bảng điểm chi tiết</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="table-desktop text-sm">
-                <thead>
-                  <tr className="text-xs text-gray-500 border-b border-white/[0.07]">
-                    <th className="text-left">Nhân viên</th>
-                    <th className="text-left hidden md:table-cell">Phòng ban</th>
-                    <th className="text-right">WO%</th>
-                    <th className="text-right hidden sm:table-cell">Đúng hạn%</th>
-                    <th className="text-right hidden lg:table-cell">TG PH</th>
-                    <th className="text-right hidden lg:table-cell">PM%</th>
-                    <th className="text-right hidden xl:table-cell">Tái phát%</th>
-                    <th className="text-right">Điểm</th>
-                    <th className="text-center">Xếp loại</th>
-                    <th className="text-left">Chi tiết</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {kpis.map((kpi) => {
-                    const gradeColor: Record<string, string> = {
-                      A: 'text-green-400', B: 'text-teal-400', C: 'text-amber', D: 'text-orange-500', F: 'text-red-400',
-                    }
-                    const rowBg = kpi.score >= 90 ? 'bg-green-500/5' : kpi.score < 60 ? 'bg-red-500/5' : ''
-                    return (
-                      <tr key={kpi.uid} className={`hover:bg-white/[0.03] ${rowBg}`}>
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-gray-100">{kpi.name}</p>
-                        </td>
-                        <td className="px-4 py-3 text-gray-400 hidden md:table-cell">{kpi.department || kpi.role}</td>
-                        <td className="px-4 py-3 text-right text-gray-300">{kpi.woStats.completionRate}%</td>
-                        <td className="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">{kpi.woStats.onTimeRate}%</td>
-                        <td className="px-4 py-3 text-right text-gray-400 hidden lg:table-cell">
-                          {kpi.responseStats.avgResponseMinutes > 0 ? `${kpi.responseStats.avgResponseMinutes}m` : '—'}
-                        </td>
-                        <td className="px-4 py-3 text-right text-gray-400 hidden lg:table-cell">{kpi.pmStats.pmCompletionRate}%</td>
-                        <td className="px-4 py-3 text-right hidden xl:table-cell">
-                          <span className={kpi.incidentStats.recurringRate > 20 ? 'text-red-400' : 'text-gray-400'}>
-                            {kpi.incidentStats.recurringRate}%
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right font-bold text-gray-100">{kpi.score}</td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`font-bold ${gradeColor[kpi.grade] ?? 'text-gray-400'}`}>{kpi.grade}</span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <button
-                            onClick={() => setSelectedKpi(kpi)}
-                            className="btn-secondary text-xs"
-                          >
-                            Chi tiết
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
       {selectedKpi && (
         <KpiDetailPanel kpi={selectedKpi} onClose={() => setSelectedKpi(null)} />
       )}
+
+      <BGDReportModal
+        open={showBgdModal}
+        onClose={() => setShowBgdModal(false)}
+        defaultMonth={month}
+        defaultYear={year}
+      />
     </div>
   )
 }

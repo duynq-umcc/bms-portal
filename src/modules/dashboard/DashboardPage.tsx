@@ -27,7 +27,11 @@ import {
   ShieldCheck,
   TrendingDown,
   Users,
+  AlertTriangle as AlertTriangleIcon,
+  ArrowUpFromLine,
+  Gauge,
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { EmptyState } from '@/components/ui/Table'
 import { startOfMonth, endOfMonth } from 'date-fns'
 import { KpiDetailPanel } from '@/components/kpi/KpiDetailPanel'
@@ -137,6 +141,7 @@ function WoStatusIcon({ status }: { status: string }) {
 // ─── page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const navigate = useNavigate()
   const [systemReadings, setSystemReadings] = useState<(InfraSystem & { id: string })[]>([])
   const [workOrders, setWorkOrders] = useState<(WorkOrder & { id: string })[]>([])
   const [incidents, setIncidents] = useState<(Incident & { id: string })[]>([])
@@ -371,6 +376,38 @@ export default function DashboardPage() {
       <div>
         <h1 className="text-lg font-bold text-gray-100">Tổng quan</h1>
         <p className="text-sm text-gray-500">Bệnh viện BMS — {today}</p>
+      </div>
+
+      {/* Quick actions */}
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => navigate('/maintenance?new=true')}
+          className="btn btn-am flex items-center gap-1.5 text-xs"
+        >
+          <Wrench className="w-3.5 h-3.5" />
+          Tạo Work Order
+        </button>
+        <button
+          onClick={() => navigate('/incidents?new=true')}
+          className="btn btn-ghost flex items-center gap-1.5 text-xs"
+        >
+          <AlertTriangleIcon className="w-3.5 h-3.5" />
+          Báo sự cố
+        </button>
+        <button
+          onClick={() => navigate('/warehouse?export=true')}
+          className="btn btn-ghost flex items-center gap-1.5 text-xs"
+        >
+          <ArrowUpFromLine className="w-3.5 h-3.5" />
+          Xuất vật tư
+        </button>
+        <button
+          onClick={() => navigate('/infrastructure?log=true')}
+          className="btn btn-ghost flex items-center gap-1.5 text-xs"
+        >
+          <Gauge className="w-3.5 h-3.5" />
+          Ghi chỉ số
+        </button>
       </div>
 
       {/* ─── ROW 1: 8 stat cards ─── */}

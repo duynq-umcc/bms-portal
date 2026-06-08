@@ -1,11 +1,14 @@
-import { useState, useEffect } from 'react'
-import { X, Plus, Trash2, Check, Users, FileText, Vote, Play, Square, User } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { X, Plus, Trash2, Check, Users, FileText, Vote, Play, Square, User, Upload, ExternalLink } from 'lucide-react'
 import { Timestamp } from 'firebase/firestore'
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage'
+import { storage } from '@/firebase/config'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   addDisposalCouncil,
   updateDisposalCouncil,
   updateDisposalRequest,
+  updateAsset,
   setDisposalCouncilVote,
   listenDisposalRequests,
   listenDisposalCouncilVotes,
@@ -456,6 +459,11 @@ export default function DisposalCouncilModal({ isOpen, onClose, existingCouncil 
   // Tab 2 state
   const [conclusion, setConclusion] = useState(existingCouncil?.councilDecision || '')
 
+  // Signed minutes upload
+  const [signedMinutesUrl, setSignedMinutesUrl] = useState(existingCouncil?.minutesSignedUrl || '')
+  const [signedMinutesUploading, setSignedMinutesUploading] = useState(false)
+  const signedMinutesInputRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     getAllStaff().then((snap) => {
       setStaff(snap.docs.map((d) => d.data() as UserOption))
@@ -477,6 +485,27 @@ export default function DisposalCouncilModal({ isOpen, onClose, existingCouncil 
 
   const addMember = (m: CouncilMember) => setMembers((prev) => [...prev, m])
   const removeMember = (uid: string) => setMembers((prev) => prev.filter((m) => m.uid !== uid))
+
+  const handleSignedMinutesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !council) return
+    setSignedMinutesUploading(true)
+    try {
+      const filename = `signed_minutes_${Date.now()}.${file.name.split('.').pop()}`
+      const path = `disposal/councils/${council.id}/${filename}`
+      const storageRef = ref(storage, path)
+      const snap = await uploadBytesResumable(storageRef, file)
+      const url = await getDownloadURL(snap.ref)
+      await updateDisposalCouncil(council.id, { minutesSignedUrl: url })
+      setSignedMinutesUrl(url)
+      toast.success('Đã tải lên biên bản đã ký')
+    } catch {
+      toast.error('Tải lên thất bại')
+    } finally {
+      setSignedMinutesUploading(false)
+      e.target.value = ''
+    }
+  }
 
   const handleCreateCouncil = async () => {
     if (!chairperson) { toast.error('Vui lòng chọn Chủ tịch HĐ'); return }
@@ -503,7 +532,7 @@ export default function DisposalCouncilModal({ isOpen, onClose, existingCouncil 
       const newCouncil: DisposalCouncil & { id: string } = {
         id: docRef.id,
         title,
-        meetingDate: Timestamp.fromDate(new Date(meetingDate)) as any,
+        meetingDate: Timestamp.fromDate(new Date(meetingDate)),
         meetingLocation,
         chairperson,
         members,
@@ -520,6 +549,20 @@ export default function DisposalCouncilModal({ isOpen, onClose, existingCouncil 
 
       for (const reqId of selectedRequestIds) {
         await updateDisposalRequest(reqId, { status: 'in_council', councilId: docRef.id })
+      }
+
+      // Notify requesters that their request is in a council meeting
+      for (const reqId of selectedRequestIds) {
+        const req = pendingRequests.find((r) => r.id === reqId)
+        if (req && req.requestedBy) {
+          await createNotification(req.requestedBy, {
+            title: `Đề xuất thanh lý: ${req.assetName}`,
+            body: `Đề xuất thanh lý ${req.assetName} đã được đưa vào HĐ thanh lý ngày ${format(new Date(meetingDate), 'dd/MM/yyyy', { locale: vi })}`,
+            type: 'system',
+            link: `/assets?tab=disposal&req=${reqId}`,
+            priority: 'medium',
+          })
+        }
       }
 
       toast.success('Hội đồng thanh lý đã được tạo')
@@ -562,8 +605,13 @@ export default function DisposalCouncilModal({ isOpen, onClose, existingCouncil 
           : 'pending_review'
         await updateDisposalRequest(vote.requestId, { status: finalStatus })
 
-        // Notify requester
+        // QW-8: revert asset status on rejection
         const req = requestsInCouncil.find((r) => r.id === vote.requestId)
+        if (vote.finalDecision === 'reject' && req?.assetId) {
+          await updateAsset(req.assetId, { status: 'active', disposalRequestId: null })
+        }
+
+        // Notify requester
         if (req && req.requestedBy) {
           await createNotification(req.requestedBy, {
             title: `Kết quả thanh lý: ${req.assetName}`,
@@ -780,6 +828,11 @@ export default function DisposalCouncilModal({ isOpen, onClose, existingCouncil 
 
               {council.status === 'in_progress' && (
                 <>
+                  {!allVoted && (
+                    <div className="p-3 rounded-xl bg-amber/5 border border-amber/20 text-sm text-amber">
+                      Cần ít nhất 3 thành viên biểu quyết trước khi kết thúc cuộc họp
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-1">Kết luận chung của Hội đồng</label>
                     <textarea
@@ -811,6 +864,47 @@ export default function DisposalCouncilModal({ isOpen, onClose, existingCouncil 
                 <button onClick={handlePrint} className="btn-primary flex items-center gap-2">
                   <FileText className="w-4 h-4" /> In biên bản
                 </button>
+              </div>
+
+              {/* Signed document upload */}
+              <div className="card p-4 border border-amber/20 space-y-3">
+                <h4 className="text-sm font-medium text-gray-300">Biên bản đã ký</h4>
+                {signedMinutesUrl ? (
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-green-500/5 border border-green-500/20">
+                    <Check className="w-5 h-5 text-green-400 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-green-400 font-medium">Đã tải lên</p>
+                      <a
+                        href={signedMinutesUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-400 hover:underline flex items-center gap-1 mt-0.5"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        Xem / Tải về biên bản đã ký
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => signedMinutesInputRef.current?.click()}
+                    className="border-2 border-dashed border-white/15 rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-amber/30 transition-colors"
+                  >
+                    <Upload className="w-6 h-6 text-t3" />
+                    <p className="text-sm text-t3">Tải lên biên bản đã ký (PDF hoặc ảnh)</p>
+                    <p className="text-xs text-t3">PDF, PNG, JPG — tối đa 10MB</p>
+                    {signedMinutesUploading && (
+                      <div className="w-6 h-6 border-2 border-amber border-t-transparent rounded-full animate-spin mt-2" />
+                    )}
+                  </div>
+                )}
+                <input
+                  ref={signedMinutesInputRef}
+                  type="file"
+                  accept=".pdf,image/*"
+                  className="hidden"
+                  onChange={handleSignedMinutesUpload}
+                />
               </div>
             </div>
           )}

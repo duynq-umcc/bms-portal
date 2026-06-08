@@ -59,6 +59,8 @@ interface Props {
   execution?: DisposalExecution & { id: string }
   onAddToCouncil: () => void
   onExecute: () => void
+  onEdit: (request: DisposalRequest & { id: string }) => void
+  onResubmit: (request: DisposalRequest & { id: string }) => void
   userRole: string
 }
 
@@ -180,6 +182,8 @@ export default function DisposalRequestDetail({
   execution,
   onAddToCouncil,
   onExecute,
+  onEdit,
+  onResubmit,
   userRole,
 }: Props) {
   if (!isOpen) return null
@@ -423,7 +427,7 @@ export default function DisposalRequestDetail({
           <div className="space-y-2 pt-2">
             {request.status === 'draft' && (
               <>
-                <button className="btn-primary w-full text-sm">Sửa đề xuất</button>
+                <button onClick={() => onEdit(request)} className="btn-primary w-full text-sm">Sửa đề xuất</button>
                 <button className="btn-primary w-full text-sm">Nộp đề xuất</button>
                 <button className="w-full px-4 py-2 rounded-xl text-sm border border-red-500/30 text-red-400 hover:bg-red-500/5 transition-colors">Xóa</button>
               </>
@@ -439,12 +443,12 @@ export default function DisposalRequestDetail({
               </button>
             )}
             {request.status === 'rejected' && (
-              <button className="w-full px-4 py-2 rounded-xl text-sm border border-white/15 text-gray-400 hover:bg-white/[0.06] transition-colors">
+              <button onClick={() => onResubmit(request)} className="w-full px-4 py-2 rounded-xl text-sm border border-white/15 text-gray-400 hover:bg-white/[0.06] transition-colors">
                 Nộp lại đề xuất mới
               </button>
             )}
             {request.status === 'executed' && (
-              <button className="w-full px-4 py-2 rounded-xl text-sm border border-white/15 text-gray-400 hover:bg-white/[0.06] transition-colors">
+              <button onClick={window.print} className="w-full px-4 py-2 rounded-xl text-sm border border-white/15 text-gray-400 hover:bg-white/[0.06] transition-colors">
                 In biên bản thanh lý
               </button>
             )}

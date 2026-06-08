@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import {
   collection,
-  collectionGroup,
   query,
   where,
   getDocs,
@@ -13,6 +12,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { createNotification } from '@/utils/createNotification'
 import { scanAndCreateExpiryAlerts } from '@/utils/fifoEngine'
 import { checkAndCreatePmWorkOrders, markOverduePmWorkOrders } from '@/utils/pmEngine'
+import type { Vendor } from '@/types/firestore'
 
 type NotificationType = 'workOrder' | 'inventory' | 'device' | 'document' | 'system'
 type NotificationPriority = 'low' | 'medium' | 'high' | 'urgent'
@@ -26,7 +26,14 @@ interface NotificationPayload {
 }
 
 const TAG = '[AlertEngine]'
-const INTERVAL_MS = 60 * 60 * 1000 // 60 minutes
+
+// P3.3: Separate intervals per check criticality
+// Critical: stale work orders (>48h open) — business risk if missed
+const CRITICAL_CHECK_MS = 15 * 60 * 1000   // 15 min
+// High: low stock, device overdue, critical expiry, PM engine, missing import docs
+const HIGH_CHECK_MS = 30 * 60 * 1000        // 30 min
+// Normal: document expiry, disposal overdue, SLA contract renewals
+const NORMAL_CHECK_MS = 60 * 60 * 1000      // 60 min
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -235,6 +242,45 @@ async function checkPendingDisposals(uid: string): Promise<void> {
 
 // ── Hook ───────────────────────────────────────────────────────────────────────
 
+// ── Check 8 — Contract/SLA renewal ─────────────────────────────────────────────
+
+async function checkContractRenewals(uid: string): Promise<void> {
+  // P1.2 fix: filter to active vendors first, then iterate embedded contracts
+  // (contracts are embedded in vendor docs; Firestore has no subcollection index)
+  const cutoff = thirtyDaysFromNow()
+  const snap = await getDocs(
+    query(collection(db, 'vendors'), where('status', '==', 'active')),
+  )
+
+  const upcoming: { vendorName: string; contractTitle: string; endDate: Date }[] = []
+
+  for (const vendorDoc of snap.docs) {
+    const vendor = vendorDoc.data() as Vendor
+    if (!vendor.contracts?.length) continue
+    for (const contract of vendor.contracts) {
+      if (!contract.endDate) continue
+      const endDate = contract.endDate.toDate()
+      if (endDate > new Date() && endDate <= cutoff) {
+        upcoming.push({ vendorName: vendor.name, contractTitle: contract.title, endDate })
+      }
+    }
+  }
+
+  log(`Contract renewals: ${upcoming.length} found`)
+
+  for (const c of upcoming) {
+    await createNotif(uid, {
+      title: `Hợp đồng sắp hết hạn: ${c.contractTitle}`,
+      body: `Nhà cung cấp: ${c.vendorName} — hết hạn ${c.endDate.toLocaleDateString('vi-VN')}`,
+      type: 'system',
+      link: `/vendors`,
+      priority: 'medium',
+    })
+  }
+}
+
+// ── Hook ───────────────────────────────────────────────────────────────────────
+
 export function useAlertEngine() {
   const { user } = useAuth()
   const role = user?.role as string | undefined
@@ -242,40 +288,68 @@ export function useAlertEngine() {
   useEffect(() => {
     if (!user || !['admin', 'manager'].includes(role ?? '')) return
 
-    const runChecks = async () => {
-      log('Running checks...')
+    // P3.3: Critical checks — every 15 min
+    const runCriticalChecks = async () => {
+      try {
+        await checkStaleWorkOrders(user.uid)
+      } catch (err) {
+        console.error(TAG, 'Critical check failed:', err)
+      }
+    }
+    runCriticalChecks()
+    const criticalInterval = setInterval(runCriticalChecks, CRITICAL_CHECK_MS)
+
+    // P3.3: High-priority checks — every 30 min
+    const runHighChecks = async () => {
       try {
         await checkLowStock(user.uid)
         await checkDeviceOverdue(user.uid)
-        await checkDocumentExpiry(user.uid)
-        await checkStaleWorkOrders(user.uid)
         const created = await scanAndCreateExpiryAlerts()
         log(`Expiry scan: ${created} alerts created`)
         await checkCriticalExpiryNotifications(user.uid)
         await checkMissingImportDocs(user.uid)
-        await checkPendingDisposals(user.uid)
         const pm = await checkAndCreatePmWorkOrders()
-        log(`PM engine: ${pm.created} WOs created, ${pm.overdue} overdue`)
+        log(`PM engine: ${pm.created} WOs created, ${pm.overdue} overdue${pm.skipped > 0 ? ` (${pm.skipped} skipped)` : ''}`)
         const overdue = await markOverduePmWorkOrders()
         if (overdue > 0) log(`PM overdue marked: ${overdue}`)
-        if (import.meta.env.DEV) log('[AlertEngine] PM engine complete.')
-        log('Done.')
       } catch (err) {
-        console.error(TAG, 'Check failed:', err)
+        console.error(TAG, 'High check failed:', err)
       }
     }
+    runHighChecks()
+    const highInterval = setInterval(runHighChecks, HIGH_CHECK_MS)
 
-    runChecks()
-    const interval = setInterval(runChecks, INTERVAL_MS)
-    return () => clearInterval(interval)
+    // P3.3: Normal checks — every 60 min
+    const runNormalChecks = async () => {
+      try {
+        await checkDocumentExpiry(user.uid)
+        await checkPendingDisposals(user.uid)
+        await checkContractRenewals(user.uid)
+      } catch (err) {
+        console.error(TAG, 'Normal check failed:', err)
+      }
+    }
+    runNormalChecks()
+    const normalInterval = setInterval(runNormalChecks, NORMAL_CHECK_MS)
+
+    return () => {
+      clearInterval(criticalInterval)
+      clearInterval(highInterval)
+      clearInterval(normalInterval)
+    }
   }, [user, role])
 }
 
 // ── Check 5 — Missing import docs ─────────────────────────────────────────────
 
 async function checkMissingImportDocs(uid: string): Promise<void> {
+  // P2.1 fix: query inventoryTransactions directly instead of collectionGroup
+  // composite index required: inventoryTransactions(type ASC, legalDocsStatus ASC, date ASC)
   const snap = await getDocs(
-    query(collectionGroup(db, 'inventoryTransactions')),
+    query(
+      collection(db, 'inventoryTransactions'),
+      where('type', '==', 'import'),
+    ),
   )
 
   const cutoffMs = Date.now() - 3 * 86_400_000

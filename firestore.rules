@@ -2,6 +2,8 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Helper Functions ───────────────────────────────────────────
+
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -21,327 +23,407 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'technician';
     }
 
-    function getUserRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
-    }
-
     function isPrivileged() {
       return isAdmin() || isManager() || isTechnician();
     }
 
-    function canReadAll() {
-      return isAuthenticated();
+    // P1.1: Owner-or-privileged check — resource owner or any privileged role
+    // QW-6: Used to restrict technician read access to only their own records
+    function isOwnerOrPrivileged() {
+      return isPrivileged()
+        || resource.data.uid == request.auth.uid
+        || resource.data.assignedTo == request.auth.uid
+        || resource.data.createdBy == request.auth.uid
+        || resource.data.loggedBy == request.auth.uid;
     }
 
-    // Users — authenticated can read, admin can write, user can update own doc (FCM tokens)
+    // ── Users ─────────────────────────────────────────────────────
+
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create: if isAdmin();
+      // Users can only update own FCM tokens / lastLogin, not their role
       allow update: if isAdmin()
         || (request.auth.uid == userId
             && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['lastLogin', 'fcmTokens', 'updatedAt']));
+      allow delete: if isAdmin();
     }
 
-    // Audit log — admin only
+    // ── Audit Log ─────────────────────────────────────────────────
+
     match /auditLog/{logId} {
       allow read: if isAdmin();
       allow create: if isAdmin();
       allow update, delete: if false;
     }
 
-    // Work Orders — all roles can write
+    // ── Work Orders ───────────────────────────────────────────────
+    // P1.1: Technicians can ONLY update status/notes/completedAt/technicianId
+    //       Managers create/update any field. Admins can delete.
+    //       Technicians can READ only their own WOs (created/assigned).
+
     match /workOrders/{orderId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin() || isManager() || isTechnician();
+      allow read: if isOwnerOrPrivileged();
+      allow create: if isManager();
+      allow update: if isManager()
+        || (isTechnician()
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'notes', 'completedAt', 'technicianId']));
+      allow delete: if isAdmin();
     }
 
-    // Incidents — admin, manager can write
+    // ── Incidents ─────────────────────────────────────────────────
+    // Technicians can create (report), managers approve/resolve
+
     match /incidents/{incidentId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin() || isManager();
+      allow read: if isPrivileged();
+      allow create: if isTechnician();
+      allow update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Vendors — admin, manager can write
+    // ── Vendors ───────────────────────────────────────────────────
+
     match /vendors/{vendorId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin() || isManager();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // All other collections — admin only
+    // ── Org / Infra / Fire Safety / Civil Projects ────────────────
+
     match /org/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow write: if isManager();
     }
 
     match /infra/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow write: if isManager();
     }
 
     match /fireSafety/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow write: if isManager();
     }
 
     match /civilProjects/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow write: if isManager();
     }
+
+    // ── Medical Devices ───────────────────────────────────────────
 
     match /medicalDevices/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
+
+    // Subcollection: service history
+    match /medicalDevices/{deviceId}/serviceHistory/{recordId} {
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
+    }
+
+    // ── Compliance ────────────────────────────────────────────────
 
     match /compliance/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
+    // ── Warehouse & Inventory ─────────────────────────────────────
+
     match /warehouse/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow write: if isManager();
     }
 
     match /inventory/{docId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin() || isManager();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
     match /inventory/{docId}/transactions/{txId} {
-      allow read: if isAuthenticated();
-      allow create: if isAdmin() || isManager() || isTechnician();
-      allow update, delete: if isAdmin() || isManager();
+      allow read: if isPrivileged();
+      allow create: if isPrivileged();
+      allow update, delete: if isManager();
     }
 
     match /inventoryTransactions/{docId} {
-      allow read: if isAuthenticated();
-      allow create: if isAdmin() || isManager() || isTechnician();
-      allow update: if isAuthenticated()
-        && (getUserRole() in ['admin', 'manager']
-            || (getUserRole() == 'technician'
-                && request.resource.data.diff(resource.data).affectedKeys()
-                  .hasOnly(['legalDocs', 'legalDocsComplete', 'legalDocsStatus'])));
-      allow delete: if getUserRole() in ['admin'];
+      allow read: if isPrivileged();
+      allow create: if isPrivileged();
+      // Technicians can only update legal-docs fields on their own tx
+      allow update: if isManager()
+        || (isTechnician()
+            && request.auth.uid == resource.data.createdBy
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['legalDocs', 'legalDocsComplete', 'legalDocsStatus']));
+      allow delete: if isAdmin();
     }
 
+    // ── Import Doc Audit ──────────────────────────────────────────
+
     match /importDocAudit/{auditId} {
-      allow read: if isAuthenticated()
-        && getUserRole() in ['admin', 'manager'];
-      allow create: if isAuthenticated();
+      allow read: if isManager();
+      allow create: if isPrivileged();
       allow update, delete: if false;
     }
 
+    // ── Assets ─────────────────────────────────────────────────────
+
     match /assets/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
+
+    // Subcollection: asset disposals
+    match /assets/{assetId}/disposals/{recordId} {
+      allow read: if isManager();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
+    }
+
+    // ── Environment ───────────────────────────────────────────────
 
     match /environment/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
+
+    // ── Reports ───────────────────────────────────────────────────
+    // P1.1: Only managers/admins can read KPI reports; technicians excluded
 
     match /reports/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isAdmin() || isManager();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Maintenance schedule — admin only
+    // ── Maintenance Schedule ──────────────────────────────────────
+
     match /maintenanceSchedule/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Fire drills — admin only
+    // ── Fire Drills ───────────────────────────────────────────────
+
     match /fireDrills/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Periodic inspections — admin only
+    // ── Periodic Inspections ──────────────────────────────────────
+
     match /periodicInspections/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Civil work logs — admin only
+    // ── Civil Work Logs ───────────────────────────────────────────
+
     match /civilWorkLogs/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Calibration schedules — admin only
+    // ── Calibration Schedules ─────────────────────────────────────
+
     match /calibrationSchedules/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Legal documents — admin only
+    // ── Legal Documents ───────────────────────────────────────────
+
     match /legalDocuments/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Energy/water readings — admin only
+    // ── Energy / Water Readings ───────────────────────────────────
+
     match /energyReadings/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isPrivileged();
+      allow delete: if isManager();
     }
 
     match /waterReadings/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isPrivileged();
+      allow delete: if isManager();
     }
 
     match /waterAlerts/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isPrivileged();
+      allow delete: if isManager();
     }
 
-    // Waste log — admin only
+    // ── Waste Log ─────────────────────────────────────────────────
+
     match /wasteLog/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Building inspections — admin only
+    // ── Building Inspections ──────────────────────────────────────
+
     match /buildingInspections/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Vendor ratings — admin only
+    // ── Vendor Ratings ────────────────────────────────────────────
+
     match /vendorRatings/{docId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Subcollections — device service history
-    match /medicalDevices/{deviceId}/serviceHistory/{recordId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
-    }
+    // ── Vendor Contracts (subcollection) ─────────────────────────
 
-    // Asset disposals
-    match /assets/{assetId}/disposals/{recordId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
-    }
-
-    // Vendor contracts
     match /vendors/{vendorId}/contracts/{contractId} {
-      allow read: if canReadAll();
-      allow write: if isAdmin();
+      allow read: if isManager();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Notifications — user can only read/write their own
+    // ── Notifications ──────────────────────────────────────────────
+    // Users can only read/write their own notifications
+
     match /notifications/{userId}/items/{notifId} {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Expiry Alerts
+    // ── Expiry Alerts ─────────────────────────────────────────────
+
     match /expiryAlerts/{alertId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated()
-        && getUserRole() in ['admin', 'manager', 'technician'];
-      allow delete: if getUserRole() in ['admin', 'manager'];
+      allow read: if isPrivileged();
+      allow create, update: if isPrivileged();
+      allow delete: if isManager();
     }
 
-    // Alert Rules — authenticated can read, admin can write
+    // ── Alert Rules ───────────────────────────────────────────────
+
     match /alertRules/{ruleId} {
-      allow read: if isAuthenticated();
-      allow write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if isPrivileged();
+      allow write: if isAdmin();
     }
 
-    // PM Schedules
+    // ── PM Schedules ──────────────────────────────────────────────
+
     match /pmSchedules/{schedId} {
-      allow read: if isAuthenticated();
-      allow create, update: if getUserRole() in ['admin', 'manager'];
-      allow delete: if getUserRole() == 'admin';
+      allow read: if isPrivileged();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // PM Work Orders
+    // ── PM Work Orders ─────────────────────────────────────────────
+    // QW-2: Managers create; technicians can only update their own assigned work
+
     match /pmWorkOrders/{woId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated()
-        && (request.auth.uid == resource.data.assignedTo
-            || getUserRole() in ['admin', 'manager']);
-      allow delete: if getUserRole() in ['admin'];
+      allow read: if isPrivileged();
+      allow create: if isManager();
+      allow update: if isManager()
+        || (isTechnician() && request.auth.uid == resource.data.assignedTo);
+      allow delete: if isAdmin();
     }
 
-    // PM Execution Log
+    // ── PM Execution Log ───────────────────────────────────────────
+    // QW-3: Managers read; technicians can create execution records
+
     match /pmExecutionLog/{logId} {
-      allow read: if getUserRole() in ['admin', 'manager'];
-      allow create: if isAuthenticated();
+      allow read: if isManager();
+      allow create: if isTechnician();
       allow update, delete: if false;
     }
 
-    // Operation logs — M&E daily shift logs
+    // ── Operation Logs (M&E daily shift logs) ──────────────────────
+
     match /operationLogs/{logId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated()
-        && (request.auth.uid == resource.data.loggedBy
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'manager']);
-      allow delete: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if isPrivileged();
+      allow create: if isPrivileged();
+      allow update: if isManager()
+        || (isTechnician() && request.auth.uid == resource.data.loggedBy);
+      allow delete: if isAdmin();
     }
 
-    // Disposal Requests (P2.2)
+    // ── Disposal Requests ──────────────────────────────────────────
+    // QW-4: Only managers can create/update; technicians can read their own
+
     match /disposalRequests/{reqId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated()
-        && getUserRole() in ['admin', 'manager', 'technician'];
-      allow update: if isAuthenticated()
-        && (request.auth.uid == resource.data.requestedBy
-            || getUserRole() in ['admin', 'manager']);
-      allow delete: if getUserRole() == 'admin'
-        && resource.data.status == 'draft';
+      allow read: if isManager()
+        || (isTechnician() && request.auth.uid == resource.data.requestedBy);
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
-    // Disposal Councils (P2.2)
+    // ── Disposal Councils ─────────────────────────────────────────
+
     match /disposalCouncils/{councilId} {
-      allow read: if isAuthenticated();
-      allow create, update: if getUserRole() in ['admin', 'manager'];
-      allow delete: if getUserRole() == 'admin';
+      allow read: if isManager();
+      allow create, update: if isManager();
+      allow delete: if isAdmin();
 
       match /votes/{voteId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated()
-          && getUserRole() in ['admin', 'manager'];
+        allow read: if isManager();
+        allow create, update: if isManager();
       }
     }
 
-    // Disposal Executions (P2.2)
+    // ── Disposal Executions ────────────────────────────────────────
+
     match /disposalExecutions/{execId} {
-      allow read: if isAuthenticated();
-      allow create, update: if getUserRole() in ['admin', 'manager'];
+      allow read: if isManager();
+      allow create, update: if isManager();
       allow delete: if false;
     }
 
-    // Technician KPI cache
+    // ── Technician KPI ──────────────────────────────────────────────
+    // P1.1: Technicians can only read/update their own KPI doc (uid == docId)
+
     match /technicianKpi/{uid} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated()
-        && (request.auth.uid == uid
-            || getUserRole() in ['admin', 'manager']);
+      allow read: if isManager() || (isTechnician() && request.auth.uid == uid);
+      allow write: if isManager()
+        || (isTechnician() && request.auth.uid == uid);
     }
 
-    // KPI History
+    // ── KPI History ────────────────────────────────────────────────
+
     match /kpiHistory/{uid} {
-      allow read: if isAuthenticated()
-        && (request.auth.uid == uid
-            || getUserRole() in ['admin', 'manager']);
-      allow write: if getUserRole() in ['admin', 'manager'];
+      allow read: if isPrivileged();
+      allow write: if isManager();
 
       match /months/{period} {
-        allow read: if isAuthenticated()
-          && (request.auth.uid == uid
-              || getUserRole() in ['admin', 'manager']);
-        allow write: if getUserRole() in ['admin', 'manager'];
+        allow read: if isPrivileged();
+        allow write: if isManager();
       }
+    }
+
+    // ── DEFAULT DENY — Catch-all ──────────────────────────────────
+    // QW-5: Replaces the old wildcard match /{docId} that gave read-all
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

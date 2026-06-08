@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Timestamp } from 'firebase/firestore'
 import {
   listenCompliance, listenCalibrationSchedules, addCalibrationSchedule,
   listenLegalDocuments, addLegalDocument, listenVendors,
@@ -10,11 +11,12 @@ import { z } from 'zod'
 import Modal from '@/components/ui/Modal'
 import { TableSkeleton } from '@/components/ui/Table'
 import { toast } from '@/components/ui/Toast'
-import { ShieldCheck, AlertTriangle, CheckCircle, Plus, Download, Clock } from 'lucide-react'
+import { ShieldCheck, AlertTriangle, CheckCircle, Plus, Download, Clock, FileText, X, Upload } from 'lucide-react'
 import { format, differenceInDays } from 'date-fns'
 import { vi } from 'date-fns/locale'
+import RadiationPermitSection from './components/RadiationPermitSection'
 
-type Tab = 'calibration' | 'legal' | 'contractors'
+type Tab = 'calibration' | 'legal' | 'contractors' | 'radiation'
 
 const calSchema = z.object({
   deviceId: z.string().min(1),
@@ -33,7 +35,6 @@ const legalSchema = z.object({
   issueDate: z.string().optional(),
   expiryDate: z.string().min(1, 'Ngày hết hạn là bắt buộc'),
   issuingAuthority: z.string().min(1, 'Cơ quan cấp là bắt buộc'),
-  fileUrl: z.string().default(''),
   notes: z.string().default(''),
 })
 type LegalForm = z.infer<typeof legalSchema>
@@ -63,8 +64,8 @@ function CalibrationTab() {
         deviceId: data.deviceId || data.deviceName,
         deviceName: data.deviceName,
         calibrationLab: data.calibrationLab,
-        lastCalibrationDate: data.lastCalibrationDate ? new Date(data.lastCalibrationDate) as any : undefined,
-        nextCalibrationDate: new Date(data.nextCalibrationDate) as any,
+        lastCalibrationDate: data.lastCalibrationDate ? Timestamp.fromDate(new Date(data.lastCalibrationDate)) : undefined,
+        nextCalibrationDate: Timestamp.fromDate(new Date(data.nextCalibrationDate)),
         certNumber: data.certNumber,
         status: 'pending',
         notes: data.notes,
@@ -160,7 +161,11 @@ function CalibrationTab() {
 function LegalTab() {
   const [docs, setDocs] = useState<LegalDocument[]>([])
   const [showAdd, setShowAdd] = useState(false)
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<LegalForm>({ resolver: zodResolver(legalSchema) })
+  const [uploadedFileUrl, setUploadedFileUrl] = useState('')
+  const [uploadedFileName, setUploadedFileName] = useState('')
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const { register, handleSubmit, reset, watch, formState: { errors, isSubmitting } } = useForm<LegalForm>({ resolver: zodResolver(legalSchema) })
 
   useEffect(() => {
     const unsub = listenLegalDocuments(setDocs)
@@ -172,15 +177,17 @@ function LegalTab() {
       await addLegalDocument({
         type: data.type,
         certNumber: data.certNumber,
-        issueDate: data.issueDate ? new Date(data.issueDate) as any : undefined,
-        expiryDate: new Date(data.expiryDate) as any,
+        issueDate: data.issueDate ? Timestamp.fromDate(new Date(data.issueDate)) : undefined,
+        expiryDate: Timestamp.fromDate(new Date(data.expiryDate)),
         issuingAuthority: data.issuingAuthority,
-        fileUrl: data.fileUrl,
+        fileUrl: uploadedFileUrl,
         notes: data.notes,
       })
       toast.success('Đã thêm giấy tờ')
       setShowAdd(false)
       reset()
+      setUploadedFileUrl('')
+      setUploadedFileName('')
     } catch { toast.error('Thêm thất bại') }
   }
 
@@ -240,7 +247,7 @@ function LegalTab() {
         </div>
       </div>
 
-      <Modal open={showAdd} onClose={() => { setShowAdd(false); reset() }} title="Thêm giấy tờ pháp lý" size="md">
+      <Modal open={showAdd} onClose={() => { setShowAdd(false); reset(); setUploadedFileUrl(''); setUploadedFileName('') }} title="Thêm giấy tờ pháp lý" size="md">
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Loại giấy tờ</label>
@@ -273,9 +280,54 @@ function LegalTab() {
             <input {...register('issuingAuthority')} className="input-field" placeholder="VD: Sở Y tế..." />
             {errors.issuingAuthority && <p className="text-red-500 text-xs mt-1">{errors.issuingAuthority.message}</p>}
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">URL file (Firebase Storage)</label>
-            <input {...register('fileUrl')} className="input-field" placeholder="https://firebasestorage..." />
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">File đính kèm</label>
+            {uploadedFileUrl ? (
+              <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-3 flex items-center gap-3">
+                <FileText className="w-5 h-5 text-green-400 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-gray-200 truncate">{uploadedFileName}</p>
+                  <a href={uploadedFileUrl} target="_blank" rel="noreferrer" className="text-xs text-amber-400 hover:underline">Xem file</a>
+                </div>
+                <button type="button" onClick={() => { setUploadedFileUrl(''); setUploadedFileName('') }} className="text-t3 hover:text-red-400">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : uploadingFile ? (
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                <div className="flex justify-between text-xs text-t2 mb-1.5">
+                  <span>Đang tải lên... {uploadProgress}%</span>
+                </div>
+                <div className="h-1.5 bg-white/[0.08] rounded-full overflow-hidden">
+                  <div className="h-full bg-amber-500 rounded-full transition-all" style={{ width: `${uploadProgress}%` }} />
+                </div>
+              </div>
+            ) : (
+              <label className="flex flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-white/15 hover:border-white/25 bg-white/[0.02] cursor-pointer py-5">
+                <Upload className="w-5 h-5 text-t2" />
+                <span className="text-xs text-t2">Kéo thả hoặc click để chọn file</span>
+                <span className="text-[11px] text-t3">PDF, JPG, PNG — tối đa 20MB</span>
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+                    if (!allowed.includes(file.type)) { toast.error('Chỉ chấp nhận PDF, JPG, PNG'); return }
+                    if (file.size > 20 * 1024 * 1024) { toast.error('File quá lớn — tối đa 20MB'); return }
+                    setUploadingFile(true)
+                    setUploadProgress(0)
+                    try {
+                      const { uploadComplianceDoc } = await import('@/utils/storageUpload')
+                      const { type } = watch()
+                      const docType = type || 'cert'
+                      const url = await uploadComplianceDoc(docType, new Date().getFullYear(), file, (pct) => setUploadProgress(pct))
+                      setUploadedFileUrl(url)
+                      setUploadedFileName(file.name)
+                    } catch { toast.error('Tải file thất bại') }
+                    finally { setUploadingFile(false) }
+                  }} />
+              </label>
+            )}
           </div>
           <button type="submit" disabled={isSubmitting} className="btn-primary w-full">
             {isSubmitting ? 'Đang lưu...' : 'Lưu giấy tờ'}
@@ -408,6 +460,7 @@ export default function CompliancePage() {
           { key: 'calibration' as Tab, label: 'Kiểm định' },
           { key: 'legal' as Tab, label: 'Pháp lý' },
           { key: 'contractors' as Tab, label: 'Nhà thầu' },
+          { key: 'radiation' as Tab, label: 'Bức xạ' },
         ]).map((t) => (
           <button
             key={t.key}
@@ -424,6 +477,7 @@ export default function CompliancePage() {
       {tab === 'calibration' && <CalibrationTab />}
       {tab === 'legal' && <LegalTab />}
       {tab === 'contractors' && <ContractorsTab />}
+      {tab === 'radiation' && <RadiationPermitSection />}
     </div>
   )
 }

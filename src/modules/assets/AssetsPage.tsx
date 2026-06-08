@@ -225,11 +225,11 @@ function RegistryTab({ assets, onAdd }: { assets: Asset[]; onAdd: () => void }) 
                         </span>
                       </td>
                       <td className="px-4 py-3 hidden xl:table-cell">
-                        {(a as any).disposalRequestId ? (
+                        {a.disposalRequestId ? (
                           <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/15 text-blue-400">
-                            {(a as any).disposalStatus === 'pending_review' ? 'Chờ HĐ'
-                              : (a as any).disposalStatus === 'in_council' ? 'Đang xử lý'
-                              : (a as any).disposalStatus === 'executed' ? 'Đã thanh lý'
+                            {a.disposalStatus === 'pending_review' ? 'Chờ HĐ'
+                              : a.disposalStatus === 'in_council' ? 'Đang xử lý'
+                              : a.disposalStatus === 'executed' ? 'Đã thanh lý'
                               : 'Đã gửi'}
                           </span>
                         ) : a.status === 'disposed' ? (
@@ -838,10 +838,12 @@ export default function AssetsPage() {
   const [showAssetPicker, setShowAssetPicker] = useState(false)
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
   const [showRequestModal, setShowRequestModal] = useState(false)
+  const [editingRequest, setEditingRequest] = useState<DisposalRequest & { id: string } | null>(null)
   const [showCouncilModal, setShowCouncilModal] = useState(false)
   const [editingCouncil, setEditingCouncil] = useState<DisposalCouncil & { id: string } | undefined>()
   const [showExecutionModal, setShowExecutionModal] = useState(false)
   const [selectedExecutionReq, setSelectedExecutionReq] = useState<DisposalRequest & { id: string } | null>(null)
+  const [executionCouncilDecision, setExecutionCouncilDecision] = useState<{ method: string; approvedValue: number; conditions: string } | undefined>()
   const [showDetailPanel, setShowDetailPanel] = useState(false)
   const [selectedRequest, setSelectedRequest] = useState<DisposalRequest & { id: string } | null>(null)
 
@@ -879,7 +881,7 @@ export default function AssetsPage() {
       unsubs.push(unsub)
     }
     return () => unsubs.forEach((u) => u())
-  }, [councils.map((c) => c.id).join(',')])
+  }, [councils.length])
 
   const onSubmit = async (data: Form) => {
     try {
@@ -904,7 +906,35 @@ export default function AssetsPage() {
     setShowDetailPanel(true)
   }
 
+  const handleEdit = (req: DisposalRequest & { id: string }) => {
+    setShowDetailPanel(false)
+    // Find the asset for this request
+    const asset = assets.find((a) => a.id === req.assetId)
+    if (asset) {
+      setSelectedAsset(asset)
+      setEditingRequest(req)
+      setShowRequestModal(true)
+    }
+  }
+
+  const handleResubmit = async (req: DisposalRequest & { id: string }) => {
+    setShowDetailPanel(false)
+    const asset = assets.find((a) => a.id === req.assetId)
+    if (!asset) return
+    setSelectedAsset(asset)
+    setEditingRequest(null) // clone mode — new request
+    setShowRequestModal(true)
+  }
+
   const handleExecute = (req: DisposalRequest & { id: string }) => {
+    // Find the council decision for this request
+    const councilId = req.councilId
+    const vote = votesMap[councilId || '']?.find((v) => v.requestId === req.id)
+    setExecutionCouncilDecision(councilId ? {
+      method: vote?.method || req.proposedDisposalMethod,
+      approvedValue: vote?.approvedValue ?? req.proposedDisposalValue,
+      conditions: vote?.conditions || '',
+    } : undefined)
     setSelectedExecutionReq(req)
     setShowExecutionModal(true)
   }
@@ -1040,8 +1070,9 @@ export default function AssetsPage() {
       {selectedAsset && (
         <DisposalRequestModal
           isOpen={showRequestModal}
-          onClose={() => { setShowRequestModal(false); setSelectedAsset(null) }}
+          onClose={() => { setShowRequestModal(false); setSelectedAsset(null); setEditingRequest(null) }}
           asset={selectedAsset}
+          existingRequest={editingRequest || undefined}
         />
       )}
 
@@ -1056,8 +1087,9 @@ export default function AssetsPage() {
       {selectedExecutionReq && (
         <DisposalExecutionModal
           isOpen={showExecutionModal}
-          onClose={() => { setShowExecutionModal(false); setSelectedExecutionReq(null) }}
+          onClose={() => { setShowExecutionModal(false); setSelectedExecutionReq(null); setExecutionCouncilDecision(undefined) }}
           disposalRequest={selectedExecutionReq}
+          councilDecision={executionCouncilDecision}
         />
       )}
 
@@ -1072,6 +1104,8 @@ export default function AssetsPage() {
           execution={executions.find((e) => e.requestId === selectedRequest.id)}
           onAddToCouncil={() => handleAddToCouncil(selectedRequest)}
           onExecute={() => { setShowDetailPanel(false); handleExecute(selectedRequest) }}
+          onEdit={(req) => { setShowDetailPanel(false); handleEdit(req) }}
+          onResubmit={(req) => { setShowDetailPanel(false); handleResubmit(req) }}
           userRole={userRole}
         />
       )}

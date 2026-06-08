@@ -133,7 +133,7 @@ export default function DisposalExecutionModal({ isOpen, onClose, disposalReques
         status: 'disposed',
         disposedAt: Timestamp.now(),
         disposedValue: form.actualDisposalValue,
-      } as any)
+      })
 
       toast.success('Đã hoàn thành thanh lý tài sản')
       onClose()

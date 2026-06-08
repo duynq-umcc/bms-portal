@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react'
-import { listenMedicalDevices, listenServiceHistory, addServiceRecord, listenMaintenanceSchedule, addMaintenanceSchedule, listenPmSchedulesByAsset } from '@/firebase/db'
+import { useState, useEffect, useRef } from 'react'
+import { Timestamp } from 'firebase/firestore'
+import { listenMedicalDevices, listenServiceHistory, addServiceRecord, listenMaintenanceSchedule, addMaintenanceSchedule, listenPmSchedulesByAsset, updateMedicalDevice, listenCalibrationSchedules, updateCalibrationSchedule, addCalibrationSchedule } from '@/firebase/db'
 import type { MedicalDevice, ServiceRecord, MaintenanceSchedule } from '@/firebase/types'
+import type { CalibrationSchedule } from '@/types/firestore'
 import { TableSkeleton, EmptyState } from '@/components/ui/Table'
 import Modal from '@/components/ui/Modal'
 import { toast } from '@/components/ui/Toast'
@@ -8,10 +10,14 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import {
-  Stethoscope, Search, Plus, Clock, AlertTriangle,
+  Stethoscope, Search, Plus, AlertTriangle,
   Calendar, FileText, Info, History, FolderOpen,
-  WrenchIcon, RefreshCw, ShieldCheck,
+  WrenchIcon, ShieldCheck, MapPin, Save, Upload, Trash2, Award,
 } from 'lucide-react'
+import {
+  uploadCalibrationCert, deleteCalibrationCert,
+  isAllowedFileType,
+} from '@/utils/storageUpload'
 import { format, differenceInDays, isBefore, startOfMonth, endOfMonth, startOfQuarter, endOfQuarter } from 'date-fns'
 import PmScheduleFormModal from '../maintenance/PmScheduleFormModal'
 import type { PMSchedule } from '@/types/firestore'
@@ -75,7 +81,7 @@ function AddScheduleModal({ devices, open, onClose }: { devices: MedicalDevice[]
         deviceId: data.deviceId,
         deviceName: device?.name ?? '',
         type: data.type as MaintenanceSchedule['type'],
-        scheduledDate: { toDate: () => new Date(data.scheduledDate) } as any,
+        scheduledDate: Timestamp.fromDate(new Date(data.scheduledDate)),
         assignedTo: data.assignedTo,
         notes: data.notes,
         status: 'scheduled',
@@ -146,10 +152,14 @@ function DeviceDetailModal({ device }: { device: MedicalDevice | null }) {
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [pmSchedules, setPmSchedules] = useState<(PMSchedule & { id: string })[]>([])
   const [showPmForm, setShowPmForm] = useState(false)
+  const [showLocationForm, setShowLocationForm] = useState(false)
+  const [newLocation, setNewLocation] = useState(device?.location ?? '')
+  const [updatingLocation, setUpdatingLocation] = useState(false)
 
   useEffect(() => {
     if (!device?.id) return
     setLoadingHistory(true)
+    setNewLocation(device.location ?? '')
     const unsubHistory = listenServiceHistory(device.id, (records) => {
       setHistory(records)
       setLoadingHistory(false)
@@ -169,6 +179,26 @@ function DeviceDetailModal({ device }: { device: MedicalDevice | null }) {
     { id: 'pm', label: 'Lịch BT phòng ngừa', icon: ShieldCheck },
     { id: 'docs', label: 'Hồ sơ', icon: FolderOpen },
   ]
+
+  const handleCreateWo = () => {
+    const params = new URLSearchParams({
+      new: 'true',
+      deviceId: device.id,
+      deviceName: device.name,
+      location: device.location,
+    })
+    window.location.href = `/maintenance?${params.toString()}`
+  }
+
+  const handleUpdateLocation = async () => {
+    if (!newLocation.trim()) { toast.error('Vị trí không được để trống'); return }
+    setUpdatingLocation(true)
+    try {
+      await updateMedicalDevice(device.id, { location: newLocation.trim() } as Partial<MedicalDevice>)
+      toast.success('Đã cập nhật vị trí')
+      setShowLocationForm(false)
+    } catch { toast.error('Cập nhật thất bại') } finally { setUpdatingLocation(false) }
+  }
 
   return (
     <div className="flex flex-col max-h-[85vh]">
@@ -212,16 +242,47 @@ function DeviceDetailModal({ device }: { device: MedicalDevice | null }) {
 
       {/* Footer */}
       <div className="flex gap-2 pt-3 border-t border-white/[0.1] mt-2">
-        <button className="btn-secondary flex-1 text-sm">
+        <button onClick={handleCreateWo} className="btn-secondary flex-1 text-sm">
           <WrenchIcon className="w-4 h-4" /> Tạo Work Order BT
         </button>
-        <button className="btn-secondary flex-1 text-sm">
-          <RefreshCw className="w-4 h-4" /> Cập nhật
+        <button
+          onClick={() => { setDetailTab('history'); setShowLocationForm(false) }}
+          className="btn-secondary flex-1 text-sm"
+        >
+          <History className="w-4 h-4" /> Lịch sử BT
         </button>
-        <button className="btn-primary flex-1 text-sm">
-          <FileText className="w-4 h-4" /> Xuất PDF
+        <button
+          onClick={() => setShowLocationForm((v) => !v)}
+          className="btn-secondary flex-1 text-sm"
+        >
+          <MapPin className="w-4 h-4" /> Cập nhật vị trí
         </button>
       </div>
+
+      {/* Inline location update form */}
+      {showLocationForm && (
+        <div className="flex gap-2 items-end pt-2">
+          <div className="flex-1">
+            <input
+              value={newLocation}
+              onChange={(e) => setNewLocation(e.target.value)}
+              placeholder="Tầng / Khoa / Phòng..."
+              className="input-field text-sm"
+            />
+          </div>
+          <button
+            onClick={handleUpdateLocation}
+            disabled={updatingLocation}
+            className="btn-primary text-sm flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            {updatingLocation ? 'Đang lưu...' : 'Lưu'}
+          </button>
+          <button onClick={() => setShowLocationForm(false)} className="btn-secondary text-sm">
+            Hủy
+          </button>
+        </div>
+      )}
 
       <PmScheduleFormModal
         open={showPmForm}
@@ -313,7 +374,7 @@ function HistoryTab({ records, loading, deviceId }: { records: (ServiceRecord & 
         technician: data.technician,
         notes: data.notes,
         cost: data.cost,
-        date: { toDate: () => new Date(data.date) } as any,
+        date: Timestamp.fromDate(new Date(data.date)),
       })
       toast.success('Đã ghi nhận lịch sử bảo trì')
       setShowAdd(false)
@@ -414,29 +475,176 @@ function HistoryTab({ records, loading, deviceId }: { records: (ServiceRecord & 
 }
 
 function DocsTab({ device }: { device: MedicalDevice }) {
-  const docs = device.attachments ?? []
-  if (docs.length === 0) {
-    return (
-      <div className="text-center py-8">
-        <FileText className="w-8 h-8 mx-auto text-gray-600 mb-2" />
-        <p className="text-sm text-t3">Chưa có hồ sơ đính kèm</p>
-      </div>
-    )
+  const [certs, setCerts] = useState<(CalibrationSchedule & { id: string })[]>([])
+  const [uploading, setUploading] = useState<string | null>(null)
+  const [showUpload, setShowUpload] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const unsub = listenCalibrationSchedules((all) => {
+      setCerts(all.filter((c) => c.deviceId === device.id))
+    })
+    return unsub
+  }, [device.id])
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!isAllowedFileType(file)) { toast.error('Chỉ chấp nhận PDF, JPG, PNG'); return }
+    if (file.size > 20 * 1024 * 1024) { toast.error('File tối đa 20MB'); return }
+
+    setUploading(file.name)
+    try {
+      // Find existing cert to reuse schedule ID, or create placeholder
+      const existing = certs[0]
+      const tempId = `pending_${Date.now()}`
+      const certUrl = await uploadCalibrationCert(existing?.id ?? tempId, file)
+
+      if (existing) {
+        await updateCalibrationSchedule(existing.id, {
+          certNumber: file.name.replace(/\.[^.]+$/, ''),
+          certFileUrl: certUrl,
+        })
+      } else {
+        // No existing schedule — create one as placeholder for this cert
+        const nextDate = new Date()
+        nextDate.setFullYear(nextDate.getFullYear() + 1)
+        await addCalibrationSchedule({
+          deviceId: device.id,
+          deviceName: device.name,
+          calibrationLab: '',
+          certNumber: file.name.replace(/\.[^.]+$/, ''),
+          certFileUrl: certUrl,
+          lastCalibrationDate: undefined,
+          nextCalibrationDate: { toDate: () => nextDate } as Timestamp,
+          status: 'completed',
+          notes: 'Upload từ thiết bị',
+        })
+      }
+      toast.success('Đã tải lên giấy chứng nhận')
+    } catch {
+      toast.error('Tải lên thất bại')
+    } finally {
+      setUploading(null)
+      setShowUpload(false)
+    }
   }
+
+  const handleDeleteCert = async (cert: CalibrationSchedule & { id: string }) => {
+    if (!cert.certFileUrl) return
+    try {
+      if (cert.id && !cert.id.startsWith('pending_')) {
+        await deleteCalibrationCert(cert.certFileUrl)
+        await updateCalibrationSchedule(cert.id, { certFileUrl: '' })
+      }
+      toast.success('Đã xóa chứng nhận')
+    } catch {
+      toast.error('Xóa thất bại')
+    }
+  }
+
+  const fmt = (ts: Timestamp | undefined) => {
+    if (!ts) return '—'
+    try { return format(ts.toDate(), 'dd/MM/yyyy') } catch { return '—' }
+  }
+
+  const docs = device.attachments ?? []
+
   return (
-    <div className="space-y-2">
-      {docs.map((url, i) => (
-        <a
-          key={i}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 p-2 rounded-lg border border-white/[0.07] hover:bg-white/[0.06] transition-colors"
-        >
-          <FileText className="w-4 h-4 text-t3" />
-          <span className="text-sm text-amber underline truncate">{url.split('/').pop() ?? url}</span>
-        </a>
-      ))}
+    <div className="space-y-4">
+      {/* Calibration Certificates */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+            <Award className="w-3.5 h-3.5 text-amber" /> Giấy chứng nhận hiệu chuẩn
+          </h4>
+          <button
+            onClick={() => setShowUpload(true)}
+            className="btn-secondary text-xs py-1 px-2 flex items-center gap-1"
+          >
+            <Upload className="w-3 h-3" /> Tải lên
+          </button>
+        </div>
+
+        {showUpload && (
+          <div className="border border-dashed border-white/20 rounded-xl p-4 mb-3 text-center">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png"
+              onChange={handleUpload}
+              className="hidden"
+            />
+            {uploading ? (
+              <div className="flex items-center gap-2 justify-center text-sm text-amber">
+                <span className="animate-spin w-4 h-4 border-2 border-amber border-t-transparent rounded-full" />
+                Đang tải: {uploading}
+              </div>
+            ) : (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="btn-secondary text-xs"
+              >
+                <Upload className="w-3.5 h-3.5 mr-1" /> Chọn file (PDF, JPG, PNG · tối đa 20MB)
+              </button>
+            )}
+          </div>
+        )}
+
+        {certs.length === 0 && !showUpload ? (
+          <p className="text-xs text-t3 text-center py-3">Chưa có chứng nhận hiệu chuẩn</p>
+        ) : (
+          <div className="space-y-2">
+            {certs.map((cert) => (
+              <div key={cert.id} className="flex items-center gap-2 p-2 rounded-lg border border-white/[0.07] bg-white/[0.02]">
+                <Award className="w-4 h-4 text-amber shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-gray-200 truncate">
+                    {cert.certNumber || '—'}
+                  </p>
+                  <p className="text-[10px] text-t3">
+                    {cert.calibrationLab || '—'} · {fmt(cert.lastCalibrationDate)} → {fmt(cert.nextCalibrationDate)}
+                  </p>
+                </div>
+                {cert.certFileUrl && (
+                  <a href={cert.certFileUrl} target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs py-1 px-2">
+                    Xem
+                  </a>
+                )}
+                <button
+                  onClick={() => handleDeleteCert(cert)}
+                  className="p-1.5 text-red-400/60 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Attachments */}
+      <div>
+        <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Hồ sơ đính kèm</h4>
+        {docs.length === 0 ? (
+          <p className="text-xs text-t3 text-center py-2">Chưa có hồ sơ đính kèm</p>
+        ) : (
+          <div className="space-y-1.5">
+            {docs.map((url, i) => (
+              <a
+                key={i}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 p-2 rounded-lg border border-white/[0.07] hover:bg-white/[0.06] transition-colors"
+              >
+                <FileText className="w-4 h-4 text-t3 shrink-0" />
+                <span className="text-sm text-amber underline truncate">{url.split('/').pop() ?? url}</span>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -597,6 +805,9 @@ function DeviceRegistry({ devices }: { devices: MedicalDevice[] }) {
         <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
           {filtered.map((d) => {
             const overdue = d.nextService && isBefore(d.nextService.toDate(), new Date())
+            const warrantyDays = d.warrantyEnd ? differenceInDays(d.warrantyEnd.toDate(), new Date()) : null
+            const serviceDays = d.nextService ? differenceInDays(d.nextService.toDate(), new Date()) : null
+
             return (
               <button
                 key={d.id}
@@ -612,21 +823,26 @@ function DeviceRegistry({ devices }: { devices: MedicalDevice[] }) {
                   )}
                 </div>
                 <h3 className="font-medium text-sm text-gray-200 mb-1 line-clamp-1">{d.name}</h3>
-                <p className="text-xs text-t2 mb-2">{d.location}</p>
+                <p className="text-xs text-t2 mb-1.5">{d.location}</p>
+
+                {/* Warranty & service status */}
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {warrantyDays !== null && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${warrantyDays <= 0 ? 'bg-red-500/15 text-red-400' : warrantyDays <= 30 ? 'bg-amber/15 text-amber' : warrantyDays <= 90 ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
+                      BH: {warrantyDays <= 0 ? 'Hết BH' : `còn ${warrantyDays}d`}
+                    </span>
+                  )}
+                  {serviceDays !== null && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${serviceDays <= 0 ? 'bg-red-500/15 text-red-400' : serviceDays <= 7 ? 'bg-amber/15 text-amber' : 'bg-green-500/10 text-green-400'}`}>
+                      CS: {serviceDays <= 0 ? 'quá hạn' : `còn ${serviceDays}d`}
+                    </span>
+                  )}
+                </div>
+
                 {d.brand && (
-                  <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-white/[0.08] text-t2 mb-2">
+                  <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-white/[0.08] text-t2 mb-1.5">
                     {d.brand}
                   </span>
-                )}
-                {d.nextService && (
-                  <p className={`text-[11px] ${overdue ? 'text-red-400 font-medium' : 'text-t3'}`}>
-                    <Clock className="w-3 h-3 inline mr-0.5" />
-                    {(() => {
-                      try {
-                        return format(d.nextService!.toDate(), 'dd/MM/yyyy')
-                      } catch { return '' }
-                    })()}
-                  </p>
                 )}
               </button>
             )
@@ -772,6 +988,17 @@ function CalibrationTracker({ devices }: { devices: MedicalDevice[] }) {
   const calibrated = devices.filter((d) => d.requiresCalibration)
   const now = new Date()
 
+  const handleCreatePmWo = (device: MedicalDevice) => {
+    const params = new URLSearchParams({
+      new: 'true',
+      deviceId: device.id,
+      deviceName: device.name,
+      location: device.location,
+      type: 'calibration',
+    })
+    window.location.href = `/maintenance?${params.toString()}`
+  }
+
   return (
     <div className="card overflow-hidden">
       <div className="overflow-x-auto">
@@ -783,12 +1010,13 @@ function CalibrationTracker({ devices }: { devices: MedicalDevice[] }) {
               <th className="text-left hidden lg:table-cell">Vị trí</th>
               <th className="text-left">Ngày hiệu chuẩn</th>
               <th className="text-left">Cảnh báo</th>
+              <th className="text-left">Hành động</th>
             </tr>
           </thead>
           <tbody>
             {calibrated.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-sm text-t3">
+                <td colSpan={6} className="px-4 py-8 text-center text-sm text-t3">
                   Không có thiết bị cần hiệu chuẩn
                 </td>
               </tr>
@@ -819,13 +1047,13 @@ function CalibrationTracker({ devices }: { devices: MedicalDevice[] }) {
                     </td>
                     <td className="px-4 py-3">
                       {isOverdue ? (
-                        <div className="flex items-center gap-1">
+                        <span className="flex items-center gap-1">
                           <span className="relative flex h-2 w-2">
                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
                             <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
                           </span>
                           <span className="badge-danger">Quá hạn</span>
-                        </div>
+                        </span>
                       ) : isDueSoon ? (
                         <span className="badge-warning">Sắp đến hạn</span>
                       ) : daysUntil !== null ? (
@@ -833,6 +1061,14 @@ function CalibrationTracker({ devices }: { devices: MedicalDevice[] }) {
                       ) : (
                         <span className="badge-gray">—</span>
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => handleCreatePmWo(d)}
+                        className="btn-secondary text-xs py-1 px-2"
+                      >
+                        <WrenchIcon className="w-3 h-3 mr-1 inline" />Tạo WO
+                      </button>
                     </td>
                   </tr>
                 )

@@ -319,7 +319,7 @@ function CalendarView({
 
 export default function PmWorkOrderList() {
   const [workOrders, setWorkOrders] = useState<(PMWorkOrder & { id: string })[]>([])
-  const [loading, setLoading] = useState(true)
+  const loading = workOrders.length === 0
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [view, setView] = useState<'list' | 'calendar'>('list')
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
@@ -327,8 +327,7 @@ export default function PmWorkOrderList() {
 
   useEffect(() => {
     const unsub = listenPmWorkOrders(setWorkOrders as (docs: (PMWorkOrder & { id: string })[]) => void)
-    const timer = setTimeout(() => setLoading(false), 800)
-    return () => { unsub(); clearTimeout(timer) }
+    return () => { unsub() }
   }, [])
 
   // Count badges for tabs

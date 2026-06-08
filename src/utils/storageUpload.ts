@@ -131,3 +131,115 @@ export async function uploadDisposalCouncilDoc(
 export async function deleteDisposalStorageFile(fullPath: string): Promise<void> {
   await deleteObject(ref(storage, fullPath))
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Compliance Legal Documents Storage
+// ──────────────────────────────────────────────────────────────────────────────
+
+export async function uploadComplianceDoc(
+  docType: string,
+  year: number,
+  file: File,
+  onProgress?: (pct: number) => void
+): Promise<string> {
+  const filename = `${docType}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+  const path = `compliance/${docType}/${year}/${filename}`
+  const storageRef = ref(storage, path)
+
+  return new Promise((resolve, reject) => {
+    const task = uploadBytesResumable(storageRef, file, {
+      contentType: file.type,
+      customMetadata: { docType, originalName: file.name, year: String(year) },
+    })
+    task.on(
+      'state_changed',
+      (snap) => {
+        const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100)
+        onProgress?.(pct)
+      },
+      (err) => reject(err),
+      async () => {
+        const url = await getDownloadURL(task.snapshot.ref)
+        resolve(url)
+      }
+    )
+  })
+}
+
+export async function deleteComplianceDoc(fullPath: string): Promise<void> {
+  await deleteObject(ref(storage, fullPath))
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Radiation Permit Storage
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Calibration Certificate Storage
+// ──────────────────────────────────────────────────────────────────────────────
+
+export async function uploadCalibrationCert(
+  scheduleId: string,
+  file: File,
+  onProgress?: (pct: number) => void
+): Promise<string> {
+  const filename = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+  const path = `calibration/certs/${scheduleId}/${filename}`
+  const storageRef = ref(storage, path)
+
+  return new Promise((resolve, reject) => {
+    const task = uploadBytesResumable(storageRef, file, {
+      contentType: file.type,
+      customMetadata: { originalName: file.name, scheduleId },
+    })
+    task.on(
+      'state_changed',
+      (snap) => {
+        const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100)
+        onProgress?.(pct)
+      },
+      (err) => reject(err),
+      async () => {
+        const url = await getDownloadURL(task.snapshot.ref)
+        resolve(url)
+      }
+    )
+  })
+}
+
+export async function deleteCalibrationCert(fullPath: string): Promise<void> {
+  await deleteObject(ref(storage, fullPath))
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Radiation Permit Storage
+// ──────────────────────────────────────────────────────────────────────────────
+
+export async function uploadRadiationPermitDoc(
+  permitId: string,
+  file: File,
+  onProgress?: (pct: number) => void
+): Promise<string> {
+  const filename = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+  const path = `radiation/permits/${permitId}/${filename}`
+  const storageRef = ref(storage, path)
+
+  return new Promise((resolve, reject) => {
+    const task = uploadBytesResumable(storageRef, file, {
+      contentType: file.type,
+      customMetadata: { originalName: file.name, permitId },
+    })
+    task.on(
+      'state_changed',
+      (snap) => {
+        const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100)
+        onProgress?.(pct)
+      },
+      (err) => reject(err),
+      async () => {
+        const url = await getDownloadURL(task.snapshot.ref)
+        resolve(url)
+      }
+    )
+  })
+}

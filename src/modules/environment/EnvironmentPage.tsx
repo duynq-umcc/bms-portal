@@ -4,8 +4,10 @@ import {
   listenWaterReadings, addWaterReading,
   listenWaterAlerts,
   listenWasteLog, addWasteLog,
+  listenPestControlLogs,
 } from '@/firebase/db'
 import type { EnergyReading, WaterReading, WaterAlert, WasteLogEntry } from '@/firebase/types'
+import type { PestControlLog } from '@/types/firestore'
 import { useForm } from 'react-hook-form'
 import Modal from '@/components/ui/Modal'
 import { TableSkeleton } from '@/components/ui/Table'
@@ -14,11 +16,16 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend, ReferenceLine,
 } from 'recharts'
-import { Zap, Droplets, Trash2, Plus, AlertTriangle } from 'lucide-react'
+import { Zap, Droplets, Trash2, Plus, AlertTriangle, Bug } from 'lucide-react'
 import { format } from 'date-fns'
 import { vi } from 'date-fns/locale'
+import WwtpDashboard from './components/WwtpDashboard'
+import WwtpLogModal from './components/WwtpLogModal'
+import MedicalWasteLogModal from './components/MedicalWasteLogModal'
+import MedicalWasteSummaryCard from './components/MedicalWasteSummaryCard'
+import PestControlModal from './PestControlModal'
 
-type Tab = 'energy' | 'water' | 'waste'
+type Tab = 'energy' | 'water' | 'waste' | 'wwtp' | 'medicalWaste' | 'pestControl'
 
 const WASTE_COLORS = ['#ef4444', '#16a34a', '#3b82f6']
 
@@ -274,9 +281,11 @@ function WaterTab() {
 function WasteTab() {
   const [logs, setLogs] = useState<WasteLogEntry[]>([])
   const [showAdd, setShowAdd] = useState(false)
-  const { register, handleSubmit, reset, formState: { isSubmitting } } = useForm({
-    defaultValues: { category: 'general', weightKg: 0, processor: '', certificate: '', notes: '' },
+  const { register, handleSubmit, reset, watch, formState: { isSubmitting } } = useForm({
+    defaultValues: { category: 'general', weightKg: 0, processor: '', certificate: '', notes: '', generatorFacility: '', wasteManifestNumber: '', wasteLicenseNumber: '', treatmentMethod: '', volumeEstimate: 0, disposalContractor: '', recyclerName: '', recyclingCertificateNumber: '' },
   })
+
+  const watchCategory = watch('category')
 
   useEffect(() => {
     const unsub = listenWasteLog(setLogs)
@@ -291,6 +300,20 @@ function WasteTab() {
         processor: data.processor,
         certificate: data.certificate,
         notes: data.notes,
+        ...(data.category === 'medical_hazardous' ? {
+          generatorFacility: data.generatorFacility,
+          wasteManifestNumber: data.wasteManifestNumber,
+          wasteLicenseNumber: data.wasteLicenseNumber,
+          treatmentMethod: data.treatmentMethod,
+        } : {}),
+        ...(data.category === 'general' ? {
+          volumeEstimate: data.volumeEstimate ? Number(data.volumeEstimate) : undefined,
+          disposalContractor: data.disposalContractor,
+        } : {}),
+        ...(data.category === 'recyclable' ? {
+          recyclerName: data.recyclerName,
+          recyclingCertificateNumber: data.recyclingCertificateNumber,
+        } : {}),
       })
       toast.success('Đã ghi nhận')
       setShowAdd(false)
@@ -406,9 +429,73 @@ function WasteTab() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Đơn vị xử lý</label>
             <input {...register('processor')} className="input-field" placeholder="VD: Công ty TNHH..." />
           </div>
+
+          {/* Medical hazardous fields */}
+          {watchCategory === 'medical_hazardous' && (
+            <div className="space-y-3 p-3 rounded-xl bg-red-500/5 border border-red-500/20">
+              <p className="text-xs font-semibold text-red-400 uppercase tracking-wider">Y tế nguy hại (bắt buộc)</p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cơ sở xử lý</label>
+                <input {...register('generatorFacility')} className="input-field" placeholder="VD: Công ty Môi trường..." />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Số hóa đơn chất thải</label>
+                <input {...register('wasteManifestNumber')} className="input-field" placeholder="VD: HD-2024-001..." />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Số giấy phép chất thải</label>
+                <input {...register('wasteLicenseNumber')} className="input-field" placeholder="Số giấy phép..." />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phương pháp xử lý</label>
+                <select {...register('treatmentMethod')} className="input-field">
+                  <option value="">-- Chọn --</option>
+                  <option value=" autoclave">Autoclave</option>
+                  <option value="incineration">Đốt</option>
+                  <option value="chemical">Hóa chất</option>
+                  <option value="landfill">Chôn lấp</option>
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* General waste fields */}
+          {watchCategory === 'general' && (
+            <div className="space-y-3 p-3 rounded-xl bg-white/5 border border-white/10">
+              <p className="text-xs font-semibold text-t3 uppercase tracking-wider">Rác thải thông thường</p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Ước tính thể tích (m³)</label>
+                <input type="number" step="0.1" {...register('volumeEstimate')} className="input-field" placeholder="0.0" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nhà thầu xử lý</label>
+                <input {...register('disposalContractor')} className="input-field" placeholder="Tên nhà thầu..." />
+              </div>
+            </div>
+          )}
+
+          {/* Recyclable fields */}
+          {watchCategory === 'recyclable' && (
+            <div className="space-y-3 p-3 rounded-xl bg-green-500/5 border border-green-500/20">
+              <p className="text-xs font-semibold text-green-400 uppercase tracking-wider">Chất thải tái chế</p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Tên đơn vị tái chế</label>
+                <input {...register('recyclerName')} className="input-field" placeholder="VD: Công ty TNHH Thu hồi..." />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Số chứng nhận tái chế</label>
+                <input {...register('recyclingCertificateNumber')} className="input-field" placeholder="Số chứng nhận..." />
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Số chứng từ</label>
             <input {...register('certificate')} className="input-field" placeholder="VD: CT-2024-001..." />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
+            <textarea {...register('notes')} className="input-field w-full" rows={2} placeholder="Ghi chú..." />
           </div>
           <button type="submit" disabled={isSubmitting} className="btn-primary w-full">
             {isSubmitting ? 'Đang lưu...' : 'Lưu'}
@@ -422,10 +509,19 @@ function WasteTab() {
 export default function EnvironmentPage() {
   const [tab, setTab] = useState<Tab>('energy')
   const [loading, setLoading] = useState(true)
+  const [showWwtpModal, setShowWwtpModal] = useState(false)
+  const [showMedicalWasteModal, setShowMedicalWasteModal] = useState(false)
+  const [showPestControlModal, setShowPestControlModal] = useState(false)
+  const [pestLogs, setPestLogs] = useState<(PestControlLog & { id: string })[]>([])
 
   useEffect(() => {
     const timer = setTimeout(() => setLoading(false), 800)
     return () => { clearTimeout(timer) }
+  }, [])
+
+  useEffect(() => {
+    const unsub = listenPestControlLogs(setPestLogs)
+    return () => unsub()
   }, [])
 
   if (loading) return <div className="space-y-4"><TableSkeleton rows={6} /></div>
@@ -433,38 +529,214 @@ export default function EnvironmentPage() {
   const TABS: { key: Tab; label: string; icon: React.ElementType; color: string }[] = [
     { key: 'energy', label: 'Năng lượng', icon: Zap, color: 'text-yellow-400' },
     { key: 'water', label: 'Nước', icon: Droplets, color: 'text-blue-400' },
-    { key: 'waste', label: 'Chất thải', icon: Trash2, color: 'text-green-400' },
+    { key: 'waste', label: 'Rác thải', icon: Trash2, color: 'text-green-400' },
+    { key: 'wwtp', label: 'Nước thải', icon: Droplets, color: 'text-cyan-400' },
+    { key: 'medicalWaste', label: 'CT Y tế', icon: AlertTriangle, color: 'text-red-400' },
+    { key: 'pestControl', label: 'Kiểm soát CT', icon: Bug, color: 'text-orange-400' },
   ]
 
   return (
+    <div>
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-lg font-bold text-gray-900">Môi trường</h1>
+          <p className="text-sm text-gray-500">Giám sát năng lượng, nước, chất thải</p>
+        </div>
+
+        {/* Tab bar */}
+        <div className="flex gap-1 bg-white/[0.03] rounded-xl p-1 overflow-x-auto">
+          {TABS.map((t) => {
+            const Icon = t.icon
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${
+                  tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-t2 hover:text-gray-200'
+                }`}
+              >
+                <Icon className={`w-4 h-4 ${tab === t.key ? t.color : ''}`} />
+                {t.label}
+              </button>
+            )
+          })}
+        </div>
+
+        {tab === 'energy' && <EnergyTab />}
+        {tab === 'water' && <WaterTab />}
+        {tab === 'waste' && <WasteTab />}
+        {tab === 'wwtp' && (
+          <div className="space-y-4">
+            <div className="flex justify-end">
+              <button onClick={() => setShowWwtpModal(true)} className="btn-primary flex items-center gap-1.5 text-xs">
+                <Plus className="w-3.5 h-3.5" /> Ghi nhận WWTP
+              </button>
+            </div>
+            <WwtpDashboard />
+          </div>
+        )}
+        {tab === 'medicalWaste' && (
+          <div className="space-y-4">
+            <div className="flex justify-end">
+              <button onClick={() => setShowMedicalWasteModal(true)} className="btn-primary flex items-center gap-1.5 text-xs">
+                <Plus className="w-3.5 h-3.5" /> Ghi nhận CTYT
+              </button>
+            </div>
+            <MedicalWasteSummaryCard />
+          </div>
+        )}
+
+        {tab === 'pestControl' && (
+          <PestControlTab logs={pestLogs} onAdd={() => setShowPestControlModal(true)} />
+        )}
+      </div>
+
+      <WwtpLogModal open={showWwtpModal} onClose={() => setShowWwtpModal(false)} />
+      <MedicalWasteLogModal open={showMedicalWasteModal} onClose={() => setShowMedicalWasteModal(false)} />
+      <PestControlModal open={showPestControlModal} onClose={() => setShowPestControlModal(false)} />
+    </div>
+  )
+}
+
+// ─── Pest Control Tab ───────────────────────────────────────────────────────────
+
+function PestControlTab({ logs, onAdd }: { logs: (PestControlLog & { id: string })[]; onAdd: () => void }) {
+  const AREA_LABELS: Record<string, string> = {
+    kitchen: 'Nhà bếp',
+    warehouse: 'Kho',
+    wards: 'Khu điều trị',
+    operating_theatres: 'Phòng mổ',
+    pharmacy: 'Dược phòng',
+    exterior: 'Khu vực ngoài',
+    laboratory: 'Xét nghiệm',
+    morgue: 'Nhà xác',
+    sterilization: 'Tiệt khuẩn',
+  }
+
+  const METHOD_LABELS: Record<string, string> = {
+    spray: 'Xịt thuốc',
+    trap: 'Bẫy',
+    bait: 'Mồi độc',
+    fumigation: 'Khói/hơi',
+    other: 'Khác',
+  }
+
+  const totalLogs = logs.length
+  const latestLog = logs[0]
+  const now = new Date()
+
+  const overdueLogs = logs.filter((l) => {
+    if (!l.nextScheduledDate) return false
+    return l.nextScheduledDate.toDate() < now
+  })
+
+  return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-bold text-gray-900">Môi trường</h1>
-        <p className="text-sm text-gray-500">Giám sát năng lượng, nước, chất thải</p>
+      {/* Summary cards */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="card p-4 text-center">
+          <p className="text-xs text-t3 mb-1">Tổng lượt kiểm soát</p>
+          <p className="text-2xl font-bold text-orange-400">{totalLogs}</p>
+        </div>
+        <div className="card p-4 text-center">
+          <p className="text-xs text-t3 mb-1">Lần gần nhất</p>
+          <p className="text-sm font-semibold text-gray-200">
+            {latestLog ? format(latestLog.date.toDate(), 'dd/MM/yyyy', { locale: vi }) : '—'}
+          </p>
+          <p className="text-[10px] text-t3">{latestLog?.contractorName || '—'}</p>
+        </div>
+        <div className="card p-4 text-center">
+          <p className="text-xs text-t3 mb-1">Lần tiếp theo</p>
+          <p className={`text-sm font-semibold ${overdueLogs.length > 0 ? 'text-red-400' : 'text-green-400'}`}>
+            {latestLog?.nextScheduledDate
+              ? format(latestLog.nextScheduledDate.toDate(), 'dd/MM/yyyy', { locale: vi })
+              : '—'}
+          </p>
+          {overdueLogs.length > 0 && (
+            <p className="text-[10px] text-red-400">{overdueLogs.length} quá hạn!</p>
+          )}
+        </div>
       </div>
 
-      {/* Tab bar */}
-      <div className="flex gap-1 bg-white/[0.03] rounded-xl p-1">
-        {TABS.map((t) => {
-          const Icon = t.icon
-          return (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-                tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-t2 hover:text-gray-200'
-              }`}
-            >
-              <Icon className={`w-4 h-4 ${tab === t.key ? t.color : ''}`} />
-              {t.label}
-            </button>
-          )
-        })}
+      {/* Overdue alert */}
+      {overdueLogs.length > 0 && (
+        <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-red-400">Cảnh báo: Kiểm soát côn trùng quá hạn!</p>
+            <p className="text-xs text-red-300 mt-1">
+              Có {overdueLogs.length} lần kiểm soát đã quá hạn theo lịch. Vui lòng liên hệ nhà thầu để sắp xếp.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-end">
+        <button onClick={onAdd} className="btn-primary flex items-center gap-1.5 text-xs">
+          <Plus className="w-3.5 h-3.5" /> Thêm nhật ký
+        </button>
       </div>
 
-      {tab === 'energy' && <EnergyTab />}
-      {tab === 'water' && <WaterTab />}
-      {tab === 'waste' && <WasteTab />}
+      {logs.length === 0 ? (
+        <div className="card p-12 text-center">
+          <Bug className="w-10 h-10 text-t3 mx-auto mb-3" />
+          <p className="text-sm text-t3">Chưa có nhật ký kiểm soát côn trùng</p>
+          <button onClick={onAdd} className="mt-3 text-xs text-amber hover:underline">Thêm nhật ký đầu tiên</button>
+        </div>
+      ) : (
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="table-desktop">
+              <thead>
+                <tr>
+                  <th className="text-left">Ngày</th>
+                  <th className="text-left hidden md:table-cell">Nhà thầu</th>
+                  <th className="text-left hidden lg:table-cell">Khu vực</th>
+                  <th className="text-left hidden sm:table-cell">Phương pháp</th>
+                  <th className="text-left hidden xl:table-cell">Hóa chất</th>
+                  <th className="text-left hidden md:table-cell">Lần tiếp theo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logs.slice(0, 20).map((log) => {
+                  const isOverdue = log.nextScheduledDate && log.nextScheduledDate.toDate() < now
+                  return (
+                    <tr key={log.id} className="hover:bg-white/[0.03]">
+                      <td className="px-4 py-3">
+                        <p className="text-sm text-gray-200">
+                          {format(log.date.toDate(), 'dd/MM/yyyy', { locale: vi })}
+                        </p>
+                        <p className="text-[10px] text-t3">{log.operatorName}</p>
+                      </td>
+                      <td className="px-4 py-3 hidden md:table-cell text-sm text-gray-300">{log.contractorName}</td>
+                      <td className="px-4 py-3 hidden lg:table-cell">
+                        <div className="flex flex-wrap gap-1">
+                          {log.areas.map((a) => (
+                            <span key={a} className="badge-info text-[10px]">{AREA_LABELS[a] || a}</span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        <span className="text-xs text-gray-400">{METHOD_LABELS[log.method] || log.method}</span>
+                      </td>
+                      <td className="px-4 py-3 hidden xl:table-cell text-xs text-gray-400">{log.chemicalUsed || '—'}</td>
+                      <td className="px-4 py-3 hidden md:table-cell">
+                        {log.nextScheduledDate ? (
+                          <span className={`text-xs font-medium ${isOverdue ? 'text-red-400' : 'text-green-400'}`}>
+                            {format(log.nextScheduledDate.toDate(), 'dd/MM/yyyy', { locale: vi })}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-t3">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

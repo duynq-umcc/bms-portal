@@ -3,9 +3,11 @@ import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Cpu, Wrench, Menu, BarChart3, X,
   Flame, HardHat, Stethoscope, ShieldCheck, Warehouse,
-  Box, Users, Leaf,
+  Box, Users, Leaf, ClipboardCheck, Search, GraduationCap,
 } from 'lucide-react'
 import { listenInventory } from '@/firebase/db'
+import { rolePermissions } from '@/config/rolePermissions'
+import { useAuth } from '@/contexts/AuthContext'
 
 const MAIN_TABS = [
   { to: '/', icon: LayoutDashboard, label: 'Tổng quan' },
@@ -14,22 +16,33 @@ const MAIN_TABS = [
 ]
 
 const MORE_ITEMS = [
-  { to: '/org', icon: Users, label: 'Tổ chức' },
-  { to: '/infra', icon: Cpu, label: 'Hạ tầng' },
-  { to: '/fire-safety', icon: Flame, label: 'PCCC' },
-  { to: '/civil', icon: HardHat, label: 'Xây dựng' },
-  { to: '/compliance', icon: ShieldCheck, label: 'Compliance' },
-  { to: '/warehouse', icon: Warehouse, label: 'Kho', badge: true },
-  { to: '/assets', icon: Box, label: 'Tài sản' },
-  { to: '/vendors', icon: Users, label: 'Nhà cung cấp' },
-  { to: '/environment', icon: Leaf, label: 'Môi trường' },
-  { to: '/reports', icon: BarChart3, label: 'Báo cáo' },
+  { to: '/org', icon: Users, label: 'Tổ chức', module: 'org' },
+  { to: '/infra', icon: Cpu, label: 'Hạ tầng', module: 'infra' },
+  { to: '/fire-safety', icon: Flame, label: 'PCCC', module: 'fireSafety' },
+  { to: '/civil', icon: HardHat, label: 'Xây dựng', module: 'civil' },
+  { to: '/five-s', icon: ClipboardCheck, label: '5S', module: 'fiveS' },
+  { to: '/patrol', icon: Search, label: 'Tuần tra', module: 'patrol' },
+  { to: '/compliance', icon: ShieldCheck, label: 'Compliance', module: 'compliance' },
+  { to: '/warehouse', icon: Warehouse, label: 'Kho', module: 'warehouse', badge: true },
+  { to: '/assets', icon: Box, label: 'Tài sản', module: 'assets' },
+  { to: '/vendors', icon: Users, label: 'Nhà cung cấp', module: 'vendors' },
+  { to: '/environment', icon: Leaf, label: 'Môi trường', module: 'environment' },
+  { to: '/reports', icon: BarChart3, label: 'Báo cáo', module: 'reports' },
+  { to: '/training', icon: GraduationCap, label: 'Đào tạo', module: 'training' },
 ]
 
 export default function BottomNav() {
+  const { user } = useAuth()
   const location = useLocation()
   const [moreOpen, setMoreOpen] = useState(false)
   const [lowStockCount, setLowStockCount] = useState(0)
+
+  // P2.3: Filter nav items by role permission
+  const visibleMoreItems = MORE_ITEMS.filter((item) => {
+    const perm = (rolePermissions[user?.role ?? '']?.[item.module as keyof typeof rolePermissions[string]] as string | undefined) ?? 'none'
+    return perm !== 'none'
+  })
+  const canSeeReports = (rolePermissions[user?.role ?? '']?.reports as string | undefined) !== 'none'
 
   useEffect(() => {
     const unsub = listenInventory((items) => {
@@ -41,7 +54,7 @@ export default function BottomNav() {
   const isActive = (to: string) =>
     to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
 
-  const moreActiveMobile = MORE_ITEMS.some((m) => location.pathname.startsWith(m.to))
+  const moreActiveMobile = visibleMoreItems.some((m) => location.pathname.startsWith(m.to))
 
   return (
     <>
@@ -86,15 +99,17 @@ export default function BottomNav() {
           </button>
 
           {/* Reports tab */}
-          <NavLink
-            to="/reports"
-            className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors ${
-              isActive('/reports') ? 'text-amber' : 'text-t3'
-            }`}
-          >
-            <BarChart3 className="w-5 h-5" />
-            <span>Báo cáo</span>
-          </NavLink>
+          {canSeeReports && (
+            <NavLink
+              to="/reports"
+              className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors ${
+                isActive('/reports') ? 'text-amber' : 'text-t3'
+              }`}
+            >
+              <BarChart3 className="w-5 h-5" />
+              <span>Báo cáo</span>
+            </NavLink>
+          )}
         </div>
       </nav>
 
@@ -136,7 +151,7 @@ export default function BottomNav() {
 
             {/* Grid */}
             <div className="grid grid-cols-4 gap-2 p-3">
-              {MORE_ITEMS.map((item) => (
+              {visibleMoreItems.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}

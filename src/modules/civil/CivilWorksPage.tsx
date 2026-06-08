@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Timestamp } from 'firebase/firestore'
 import {
   listenCivilProjects, listenCivilWorkLogs, addCivilWorkLog,
   listenBuildingInspections, updateBuildingInspection,
@@ -188,7 +189,7 @@ function ChecklistTab({ inspections }: { inspections: BuildingInspection[] }) {
     try {
       await updateBuildingInspection(item.id, {
         checked: !item.checked,
-        checkedAt: new Date() as any,
+        checkedAt: Timestamp.now(),
       })
     } catch { toast.error('Cập nhật thất bại') }
   }
@@ -273,7 +274,7 @@ function WorklogTab({ logs }: { logs: CivilWorkLog[] }) {
 
   const onSubmit = async (data: WorkLogForm) => {
     try {
-      await addCivilWorkLog({ ...data, date: new Date() as any })
+      await addCivilWorkLog({ ...data, date: Timestamp.now() })
       toast.success('Đã thêm nhật ký')
       setShowAdd(false)
       reset()

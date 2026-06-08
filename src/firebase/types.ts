@@ -3,6 +3,9 @@
 // This file re-exports them for backward compatibility with existing imports
 
 export type { FirestoreUser as UserProfile, FirestoreUser as StaffMember } from '../types/firestore'
+export type { FirestoreUser } from '../types/firestore'
+import type { FirestoreUser } from '../types/firestore'
+export type StaffDoc = FirestoreUser & { uid: string; id: string }
 export type { WorkOrder, WorkOrderStatus, WorkOrderPriority, WorkOrderCategory } from '../types/firestore'
 export type { Device as MedicalDevice, ServiceRecord, MaintenanceSchedule } from '../types/firestore'
 export type { InventoryItem as WarehouseItem, InventoryItem, InventoryTransaction, ExpiryAlert, ExpiryAlertLevel, LegalDocs, LegalDocsStatus, ImportedDoc, ImportedInvoiceDoc, ImportedCustomsDoc, ImportDocAudit } from '../types/firestore'
@@ -43,6 +46,16 @@ export type {
   WasteLogEntry,
   BuildingInspection,
   VendorRating,
+  FiveSLog,
+  FiveSCheckItem,
+  FiveSScore,
+  FiveSArea,
+  PatrolLog,
+  PatrolFinding,
+  PatrolFindingSeverity,
+  TrainingRecord,
+  TrainingAttendee,
+  TrainingType,
 } from '../types/firestore'
 
 // Timestamps are used throughout

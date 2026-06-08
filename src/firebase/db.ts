@@ -15,9 +15,11 @@ import {
   limit,
   writeBatch,
   type Unsubscribe,
+  type WithFieldValue,
 } from 'firebase/firestore'
 import { db } from './config'
 import type {
+  FirestoreUser,
   InfraSystem,
   WorkOrder,
   FireSafetyRecord,
@@ -50,6 +52,9 @@ import type {
   NotificationItem,
   ExpiryAlert,
   ImportDocAudit,
+  FiveSLog,
+  PatrolLog,
+  TrainingRecord,
 } from './types'
 
 // Users
@@ -61,6 +66,11 @@ export const getUser = (uid: string) => getDoc(userDoc(uid))
 export const staffRef = () => collection(db, 'org')
 export const staffDoc = (uid: string) => doc(db, `org/${uid}`)
 export const getAllStaff = () => getDocs(staffRef())
+export const listenStaff = (cb: (docs: (FirestoreUser & { uid: string; id: string })[]) => void): Unsubscribe => {
+  return onSnapshot(staffRef(), (snap) =>
+    cb(snap.docs.map((d) => ({ ...d.data(), uid: d.id, id: d.id } as FirestoreUser & { uid: string; id: string })))
+  )
+}
 
 // Infra
 export const infraRef = () => collection(db, 'infra')
@@ -185,6 +195,9 @@ export const listenReports = (cb: (docs: (Report & { id: string })[]) => void): 
     cb(snap.docs.map((d) => ({ ...(d.data() as object), id: d.id } as Report & { id: string })))
   )
 }
+export const addReport = (data: Omit<Report, 'id'>) => addDoc(reportsRef(), { ...data, createdAt: serverTimestamp() })
+export const updateReport = (id: string, data: Partial<Report>) =>
+  updateDoc(doc(db, `reports/${id}`), data as WithFieldValue<object>)
 
 // System Readings (infra collection)
 export const systemReadingsRef = () => collection(db, 'infra')
@@ -366,6 +379,8 @@ export const listenCalibrationSchedules = (cb: (docs: (CalibrationSchedule & { i
   )
 }
 export const addCalibrationSchedule = (data: Omit<CalibrationSchedule, 'id'>) => addDoc(calibrationSchedulesRef(), data)
+export const updateCalibrationSchedule = (id: string, data: Partial<CalibrationSchedule>) =>
+  updateDoc(doc(db, `calibrationSchedules/${id}`), data as Partial<CalibrationSchedule>)
 
 // ─── Legal Documents (legalDocuments collection) ─────────────────────────────
 export const legalDocumentsRef = () => collection(db, 'legalDocuments')
@@ -449,6 +464,38 @@ export const listenVendorRatings = (cb: (docs: (VendorRating & { id: string })[]
     cb(snap.docs.map((d) => ({ ...(d.data() as object), id: d.id } as VendorRating & { id: string })))
   )
 }
+
+// ─── 5S Checklist Logs ────────────────────────────────────────────────────────
+export const fiveSLogsRef = () => collection(db, 'fiveSLogs')
+export const listenFiveSLogs = (cb: (docs: (FiveSLog & { id: string })[]) => void): Unsubscribe => {
+  return onSnapshot(query(fiveSLogsRef(), orderBy('checkDate', 'desc')), (snap) =>
+    cb(snap.docs.map((d) => ({ ...(d.data() as object), id: d.id } as FiveSLog & { id: string })))
+  )
+}
+export const addFiveSLog = (data: Omit<FiveSLog, 'id'>) =>
+  addDoc(fiveSLogsRef(), { ...data, createdAt: serverTimestamp() })
+
+// ─── Civil Patrol Logs ────────────────────────────────────────────────────────
+export const patrolLogsRef = () => collection(db, 'patrolLogs')
+export const listenPatrolLogs = (cb: (docs: (PatrolLog & { id: string })[]) => void): Unsubscribe => {
+  return onSnapshot(query(patrolLogsRef(), orderBy('patrolDate', 'desc')), (snap) =>
+    cb(snap.docs.map((d) => ({ ...(d.data() as object), id: d.id } as PatrolLog & { id: string })))
+  )
+}
+export const addPatrolLog = (data: Omit<PatrolLog, 'id'>) =>
+  addDoc(patrolLogsRef(), { ...data, createdAt: serverTimestamp() })
+
+// ─── Training Records ─────────────────────────────────────────────────────────
+export const trainingRecordsRef = () => collection(db, 'trainingRecords')
+export const listenTrainingRecords = (cb: (docs: (TrainingRecord & { id: string })[]) => void): Unsubscribe => {
+  return onSnapshot(query(trainingRecordsRef(), orderBy('sessionDate', 'desc')), (snap) =>
+    cb(snap.docs.map((d) => ({ ...(d.data() as object), id: d.id } as TrainingRecord & { id: string })))
+  )
+}
+export const addTrainingRecord = (data: Omit<TrainingRecord, 'id'>) =>
+  addDoc(trainingRecordsRef(), { ...data, createdAt: serverTimestamp() })
+export const updateTrainingRecord = (id: string, data: Partial<TrainingRecord>) =>
+  updateDoc(doc(db, `trainingRecords/${id}`), data)
 
 // ─── Work Orders ──────────────────────────────────────────────────────────────
 export const workOrdersByCategory = (
@@ -601,8 +648,7 @@ export const inventoryTransactionDoc = (id: string) =>
 
 export const updateInventoryTransaction = (
   id: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  data: any
+  data: WithFieldValue<Partial<import('@/types/firestore').InventoryTransaction>>,
 ) => updateDoc(inventoryTransactionDoc(id), data)
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -657,9 +703,69 @@ export const addPmWorkOrder = (data: Omit<import('@/types/firestore').PMWorkOrde
 
 export const updatePmWorkOrder = (
   id: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  data: any
+  data: WithFieldValue<Partial<import('@/types/firestore').PMWorkOrder>>,
 ) => updateDoc(pmWorkOrderDoc(id), data)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PM Schedules (P1.2 — schedule history + WO creation, P1.3 — asset service history)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const listenPmWorkOrdersByAsset = (
+  assetId: string,
+  cb: (docs: (import('@/types/firestore').PMWorkOrder & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(
+      pmWorkOrdersRef(),
+      where('assetId', '==', assetId),
+      orderBy('dueDate', 'desc'),
+      limit(20),
+    ),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...d.data(),
+          id: d.id,
+        } as import('@/types/firestore').PMWorkOrder & { id: string }))
+      ),
+  )
+}
+
+export const listenPmWorkOrdersBySchedule = (
+  scheduleId: string,
+  cb: (docs: (import('@/types/firestore').PMWorkOrder & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(
+      pmWorkOrdersRef(),
+      where('pmScheduleId', '==', scheduleId),
+      orderBy('dueDate', 'desc'),
+      limit(20),
+    ),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...d.data(),
+          id: d.id,
+        } as import('@/types/firestore').PMWorkOrder & { id: string }))
+      ),
+  )
+}
+
+export const listenPmExecutions = (
+  cb: (docs: (import('@/types/firestore').PMExecutionLog & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(collection(db, 'pmExecutionLog'), orderBy('runAt', 'desc'), limit(20)),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...d.data(),
+          id: d.id,
+        } as import('@/types/firestore').PMExecutionLog & { id: string }))
+      ),
+  )
+}
 
 export const listenPmSchedulesByAsset = (
   assetId: string,
@@ -780,3 +886,143 @@ export const listenDisposalExecutions = (
 export const addDisposalExecution = (
   data: Omit<import('@/types/firestore').DisposalExecution, 'id'>,
 ) => addDoc(disposalExecutionsRef(), data)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PCCC Inspections (legal requirement under NĐ 136/2020)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const pcccInspectionsRef = () => collection(db, 'pcccInspections')
+
+export const listenPcccInspections = (
+  cb: (docs: (import('@/types/firestore').PcccInspection & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(pcccInspectionsRef(), orderBy('inspectedAt', 'desc'), limit(24)),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').PcccInspection & { id: string }))
+      ),
+  )
+}
+
+export const addPcccInspection = (
+  data: Omit<import('@/types/firestore').PcccInspection, 'id'>,
+) => addDoc(pcccInspectionsRef(), { ...data, createdAt: serverTimestamp() })
+
+export const getPcccInspectionByMonth = async (month: string) => {
+  const q = query(pcccInspectionsRef(), where('month', '==', month))
+  const snap = await getDocs(q)
+  return snap.docs[0]?.id
+}
+
+export const updatePcccInspection = (
+  id: string,
+  data: Partial<import('@/types/firestore').PcccInspection>,
+) => updateDoc(doc(db, `pcccInspections/${id}`), data)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// WWTP Daily Logs (M12 / M03)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const wwtpLogsRef = () => collection(db, 'wwtpLogs')
+
+export const listenWwtpLogs = (
+  cb: (docs: (import('@/types/firestore').WwtpLog & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(wwtpLogsRef(), orderBy('logDate', 'desc'), limit(60)),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').WwtpLog & { id: string }))
+      ),
+  )
+}
+
+export const addWwtpLog = (data: Omit<import('@/types/firestore').WwtpLog, 'id' | 'createdAt'>) =>
+  addDoc(wwtpLogsRef(), { ...data, createdAt: serverTimestamp() })
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Medical Waste Logs (M12)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const medicalWasteLogsRef = () => collection(db, 'medicalWasteLogs')
+
+export const listenMedicalWasteLogs = (
+  cb: (docs: (import('@/types/firestore').MedicalWasteLog & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(medicalWasteLogsRef(), orderBy('logDate', 'desc'), limit(100)),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').MedicalWasteLog & { id: string }))
+      ),
+  )
+}
+
+export const addMedicalWasteLog = (data: Omit<import('@/types/firestore').MedicalWasteLog, 'id' | 'createdAt'>) =>
+  addDoc(medicalWasteLogsRef(), { ...data, createdAt: serverTimestamp() })
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Pest Control Logs
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const pestControlLogsRef = () => collection(db, 'pestControlLogs')
+
+export const listenPestControlLogs = (
+  cb: (docs: (import('@/types/firestore').PestControlLog & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(pestControlLogsRef(), orderBy('date', 'desc'), limit(100)),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').PestControlLog & { id: string }))
+      ),
+  )
+}
+
+export const addPestControlLog = (data: Omit<import('@/types/firestore').PestControlLog, 'id'>) =>
+  addDoc(pestControlLogsRef(), { ...data, createdAt: serverTimestamp() })
+
+export const updatePestControlLog = (id: string, data: Partial<import('@/types/firestore').PestControlLog>) =>
+  updateDoc(doc(db, `pestControlLogs/${id}`), data as WithFieldValue<object>)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Radiation Permits (M08)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const radiationPermitsRef = () => collection(db, 'radiationPermits')
+
+export const listenRadiationPermits = (
+  cb: (docs: (import('@/types/firestore').RadiationPermit & { id: string })[]) => void,
+): Unsubscribe => {
+  return onSnapshot(
+    query(radiationPermitsRef(), orderBy('expiryDate', 'asc')),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => ({
+          ...(d.data() as object),
+          id: d.id,
+        } as import('@/types/firestore').RadiationPermit & { id: string }))
+      ),
+  )
+}
+
+export const addRadiationPermit = (data: Omit<import('@/types/firestore').RadiationPermit, 'id'>) =>
+  addDoc(radiationPermitsRef(), data)
+
+export const updateRadiationPermit = (
+  id: string,
+  data: Partial<import('@/types/firestore').RadiationPermit>,
+) => updateDoc(doc(db, `radiationPermits/${id}`), data)

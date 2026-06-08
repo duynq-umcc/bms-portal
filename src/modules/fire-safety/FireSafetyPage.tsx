@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Timestamp } from 'firebase/firestore'
 import { listenFireSafety, listenIncidents, addFireDrill, listenFireDrills, listenPeriodicInspections, updatePeriodicInspection } from '@/firebase/db'
 import type { FireSafetyRecord, Incident, FireDrill, PeriodicInspection } from '@/firebase/types'
 import { useForm } from 'react-hook-form'
@@ -10,8 +11,11 @@ import { toast } from '@/components/ui/Toast'
 import { Flame, ShieldCheck, CheckCircle, Clock, AlertTriangle, Plus, Printer } from 'lucide-react'
 import { format, differenceInDays, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns'
 import { vi } from 'date-fns/locale'
+import { useGetPcccInspections } from '@/hooks/usePcccInspections'
+import PcccInspectionModal from './components/PcccInspectionModal'
+import PcccInspectionHistoryTable from './components/PcccInspectionHistoryTable'
 
-type Tab = 'equipment' | 'drills' | 'inspections'
+type Tab = 'equipment' | 'drills' | 'inspections' | 'pccc'
 
 const drillSchema = z.object({
   date: z.string().min(1, 'Ngày là bắt buộc'),
@@ -231,7 +235,7 @@ function InspectionsTab({ inspections }: { inspections: PeriodicInspection[] }) 
     try {
       await updatePeriodicInspection(inspection.id, {
         checked: !inspection.checked,
-        checkedAt: new Date() as any,
+        checkedAt: Timestamp.now(),
       })
     } catch { toast.error('Cập nhật thất bại') }
   }
@@ -304,6 +308,9 @@ export default function FireSafetyPage() {
   const [inspections, setInspections] = useState<PeriodicInspection[]>([])
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [loading, setLoading] = useState(true)
+  const [showPcccModal, setShowPcccModal] = useState(false)
+
+  const { inspections: pcccInspections, loading: pcccLoading } = useGetPcccInspections()
 
   useEffect(() => {
     const unsub1 = listenFireSafety(setRecords)
@@ -317,9 +324,12 @@ export default function FireSafetyPage() {
   const overdue = records.filter((r) => r.status === 'expired' || (r.nextDue && r.nextDue.toDate() < new Date()))
   const dueSoon = records.filter((r) => r.status === 'due')
 
+  const currentMonth = format(new Date(), 'yyyy-MM')
+  const hasThisMonthPccc = pcccInspections.some((p) => p.month === currentMonth)
+
   const handleAddDrill = async (data: DrillForm) => {
     try {
-      await addFireDrill({ ...data, result: 'pass' as const, date: new Date(data.date) as any })
+      await addFireDrill({ ...data, result: 'pass' as const, date: Timestamp.fromDate(new Date(data.date)) })
       toast.success('Đã thêm lịch diễn tập')
     } catch { toast.error('Thêm thất bại') }
   }
@@ -328,72 +338,118 @@ export default function FireSafetyPage() {
     { key: 'equipment', label: 'Thiết bị PCCC', badge: overdue.length || undefined },
     { key: 'drills', label: 'Diễn tập' },
     { key: 'inspections', label: 'Kiểm tra định kỳ' },
+    { key: 'pccc', label: 'Biên bản PCCC', badge: !hasThisMonthPccc ? 1 : undefined },
   ]
 
   if (loading) return <div className="space-y-4"><TableSkeleton rows={8} /></div>
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-bold text-gray-900">PCCC & An toàn</h1>
-        <p className="text-sm text-gray-500">{records.length} thiết bị · {overdue.length} quá hạn · {dueSoon.length} sắp đến hạn</p>
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="card p-4 text-center">
-          <div className="w-10 h-10 bg-red-500/10 text-red-400 rounded-xl flex items-center justify-center mx-auto mb-2">
-            <AlertTriangle className="w-5 h-5" />
-          </div>
-          <p className="text-2xl font-bold text-red-400">{overdue.length}</p>
-          <p className="text-xs text-t2">Hết hạn / Quá hạn</p>
+    <div>
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-lg font-bold text-gray-900">PCCC & An toàn</h1>
+          <p className="text-sm text-gray-500">{records.length} thiết bị · {overdue.length} quá hạn · {dueSoon.length} sắp đến hạn</p>
         </div>
-        <div className="card p-4 text-center">
-          <div className="w-10 h-10 bg-yellow-500/10 text-yellow-400 rounded-xl flex items-center justify-center mx-auto mb-2">
-            <Clock className="w-5 h-5" />
-          </div>
-          <p className="text-2xl font-bold text-yellow-400">{dueSoon.length}</p>
-          <p className="text-xs text-t2">Sắp đến hạn</p>
-        </div>
-      </div>
 
-      {/* Tab bar */}
-      <div className="flex gap-1 bg-white/[0.03] rounded-xl p-1">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-              tab === t.key
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-t2 hover:text-gray-200'
-            }`}
-          >
-            {t.label}
-            {t.badge ? (
-              <span className={`min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold ${
-                tab === t.key ? 'bg-red-500 text-white' : 'bg-red-500/20 text-red-400'
-              }`}>
-                {t.badge}
-              </span>
-            ) : null}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab content */}
-      {tab === 'equipment' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {records.map((r) => <EquipmentCard key={r.id} record={r} />)}
-          {records.length === 0 && (
-            <div className="col-span-full">
-              <EmptyState icon={<Flame className="w-8 h-8" />} title="Chưa có thiết bị PCCC" description="Thêm thiết bị từ Firestore để bắt đầu" />
+        {/* Summary cards */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="card p-4 text-center">
+            <div className="w-10 h-10 bg-red-500/10 text-red-400 rounded-xl flex items-center justify-center mx-auto mb-2">
+              <AlertTriangle className="w-5 h-5" />
             </div>
-          )}
+            <p className="text-2xl font-bold text-red-400">{overdue.length}</p>
+            <p className="text-xs text-t2">Hết hạn / Quá hạn</p>
+          </div>
+          <div className="card p-4 text-center">
+            <div className="w-10 h-10 bg-yellow-500/10 text-yellow-400 rounded-xl flex items-center justify-center mx-auto mb-2">
+              <Clock className="w-5 h-5" />
+            </div>
+            <p className="text-2xl font-bold text-yellow-400">{dueSoon.length}</p>
+            <p className="text-xs text-t2">Sắp đến hạn</p>
+          </div>
         </div>
-      )}
-      {tab === 'drills' && <DrillsTab drills={drills} incidents={incidents} onAddDrill={handleAddDrill} />}
-      {tab === 'inspections' && <InspectionsTab inspections={inspections} />}
+
+        {/* Tab bar */}
+        <div className="flex gap-1 bg-white/[0.03] rounded-xl p-1">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                tab === t.key
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-t2 hover:text-gray-200'
+              }`}
+            >
+              {t.label}
+              {t.badge ? (
+                <span className={`min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold ${
+                  tab === t.key ? 'bg-red-500 text-white' : 'bg-red-500/20 text-red-400'
+                }`}>
+                  {t.badge}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        {tab === 'equipment' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {records.map((r) => <EquipmentCard key={r.id} record={r} />)}
+            {records.length === 0 && (
+              <div className="col-span-full">
+                <EmptyState icon={<Flame className="w-8 h-8" />} title="Chưa có thiết bị PCCC" description="Thêm thiết bị từ Firestore để bắt đầu" />
+              </div>
+            )}
+          </div>
+        )}
+        {tab === 'drills' && <DrillsTab drills={drills} incidents={incidents} onAddDrill={handleAddDrill} />}
+        {tab === 'inspections' && <InspectionsTab inspections={inspections} />}
+        {tab === 'pccc' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-gray-100 text-sm">Biên bản kiểm tra PCCC hàng tháng</h3>
+                <p className="text-xs text-t3 mt-0.5">Theo Nghị định 136/2020/NĐ-CP</p>
+              </div>
+              <button
+                onClick={() => setShowPcccModal(true)}
+                disabled={hasThisMonthPccc}
+                className="btn-primary flex items-center gap-1.5 text-xs disabled:opacity-40"
+                title={hasThisMonthPccc ? 'Đã có biên bản tháng này' : 'Lập biên bản PCCC tháng này'}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Lập biên bản {hasThisMonthPccc ? '(Đã có)' : ''}
+              </button>
+            </div>
+
+            {!hasThisMonthPccc && !pcccLoading && (
+              <div className="card p-4 border border-red-500/30 bg-red-500/5 flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-red-400">Chưa có biên bản PCCC tháng này</p>
+                  <p className="text-xs text-t3 mt-1">
+                    Theo Nghị định 136/2020/NĐ-CP, cơ sở phể tự kiểm tra PCCC hàng tháng và lập biên bản. Vui lòng thực hiện kiểm tra và lập biên bản.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {pcccLoading ? (
+              <TableSkeleton rows={5} />
+            ) : (
+              <PcccInspectionHistoryTable inspections={pcccInspections} />
+            )}
+          </div>
+        )}
+      </div>
+
+      <PcccInspectionModal
+        open={showPcccModal}
+        onClose={() => setShowPcccModal(false)}
+        onSuccess={() => {}}
+      />
     </div>
   )
 }

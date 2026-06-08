@@ -2,6 +2,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { useAlertEngine } from '@/hooks/useAlertEngine'
 import { useKpiEngine } from '@/hooks/useKpiEngine'
+import { usePmAutoRunner } from '@/hooks/usePmAutoRunner'
 import BottomNav from './BottomNav'
 import OfflineBanner from '@/components/OfflineBanner'
 import { NotificationPanel } from '@/components/NotificationPanel'
@@ -12,7 +13,8 @@ import { PushPermissionBanner } from '@/components/PushPermissionBanner'
 if (import.meta.env.DEV) {
   import('@/utils/firestoreHealthCheck').then(({ runHealthCheck }) => runHealthCheck())
 }
-import { LogOut, User, Bell, X, Menu, Search } from 'lucide-react'
+import { LogOut, User, Bell, X, Menu, Search, GraduationCap, ClipboardCheck } from 'lucide-react'
+import { rolePermissions } from '@/config/rolePermissions'
 import { useState } from 'react'
 import {
   LayoutDashboard, Cpu, Wrench, Flame, HardHat,
@@ -25,39 +27,42 @@ const SIDEBAR_SECTIONS = [
   {
     label: 'Tổng quan',
     items: [
-      { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+      { to: '/', icon: LayoutDashboard, label: 'Dashboard', module: 'dashboard' },
     ],
   },
   {
     label: 'Vận hành',
     items: [
-      { to: '/infra', icon: Cpu, label: 'Vận hành hệ thống' },
-      { to: '/maintenance', icon: Wrench, label: 'Bảo trì – Sửa chữa' },
-      { to: '/fire-safety', icon: Flame, label: 'PCCC & An toàn' },
-      { to: '/civil', icon: HardHat, label: 'Xây dựng dân dụng' },
+      { to: '/infra', icon: Cpu, label: 'Vận hành hệ thống', module: 'infra' },
+      { to: '/maintenance', icon: Wrench, label: 'Bảo trì – Sửa chữa', module: 'maintenance' },
+      { to: '/fire-safety', icon: Flame, label: 'PCCC & An toàn', module: 'fireSafety' },
+      { to: '/civil', icon: HardHat, label: 'Xây dựng dân dụng', module: 'civil' },
+      { to: '/five-s', icon: ClipboardCheck, label: 'Kiểm tra 5S', module: 'fiveS' },
+      { to: '/patrol', icon: Search, label: 'Tuần tra công trình', module: 'patrol' },
     ],
   },
   {
     label: 'Thiết bị & Tài sản',
     items: [
-      { to: '/medical-devices', icon: Stethoscope, label: 'Thiết bị Y tế' },
-      { to: '/compliance', icon: ShieldCheck, label: 'Kiểm định & Pháp lý' },
-      { to: '/warehouse', icon: Warehouse, label: 'Kho VT-TTB' },
-      { to: '/assets', icon: Box, label: 'Tài sản cố định' },
+      { to: '/medical-devices', icon: Stethoscope, label: 'Thiết bị Y tế', module: 'medicalDevices' },
+      { to: '/compliance', icon: ShieldCheck, label: 'Kiểm định & Pháp lý', module: 'compliance' },
+      { to: '/warehouse', icon: Warehouse, label: 'Kho VT-TTB', module: 'warehouse' },
+      { to: '/assets', icon: Box, label: 'Tài sản cố định', module: 'assets' },
     ],
   },
   {
     label: 'Tổ chức',
     items: [
-      { to: '/org', icon: Users, label: 'Sơ đồ tổ chức' },
-      { to: '/vendors', icon: Users, label: 'Nhà thầu & Dịch vụ' },
+      { to: '/org', icon: Users, label: 'Sơ đồ tổ chức', module: 'org' },
+      { to: '/vendors', icon: Users, label: 'Nhà thầu & Dịch vụ', module: 'vendors' },
     ],
   },
   {
     label: 'Phân tích',
     items: [
-      { to: '/environment', icon: Leaf, label: 'Môi trường' },
-      { to: '/reports', icon: BarChart3, label: 'Báo cáo & KPI' },
+      { to: '/environment', icon: Leaf, label: 'Môi trường', module: 'environment' },
+      { to: '/reports', icon: BarChart3, label: 'Báo cáo & KPI', module: 'reports' },
+      { to: '/training', icon: GraduationCap, label: 'Đào tạo & Chứng chỉ', module: 'training' },
     ],
   },
 ]
@@ -98,9 +103,12 @@ function Sidebar() {
         {SIDEBAR_SECTIONS.map((section) => (
           <div key={section.label}>
             <p className="sidebar-section-label">{section.label}</p>
-            {section.items.map((item) => (
-              <NavItem key={item.to} {...item} active={isActive(item.to)} onClick={() => navigate(item.to)} />
-            ))}
+            {section.items.map((item) => {
+              const role = user?.role ?? ''
+              const perm = (rolePermissions[role]?.[item.module as keyof typeof rolePermissions[string]] as string | undefined) ?? 'none'
+              if (perm === 'none') return null
+              return <NavItem key={item.to} {...item} active={isActive(item.to)} onClick={() => navigate(item.to)} />
+            })}
           </div>
         ))}
 
@@ -355,6 +363,9 @@ export default function AppShell() {
 
   // Compute and cache technician KPIs hourly (admin/manager only)
   useKpiEngine()
+
+  // Run PM auto-generation once per day on app load (guards for auth internally)
+  usePmAutoRunner()
 
   // Register FCM service worker and manage push token for all authenticated users
   useFCMToken()

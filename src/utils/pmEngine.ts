@@ -42,7 +42,7 @@ export function computeNextDueDate(
 
 // ─── checkAndCreatePmWorkOrders ──────────────────────────────────────────
 
-export async function checkAndCreatePmWorkOrders(): Promise<{ created: number; overdue: number }> {
+export async function checkAndCreatePmWorkOrders(): Promise<{ created: number; overdue: number; skipped: number }> {
   const now = Date.now()
   const triggerDate = Timestamp.fromMillis(now + 30 * 86_400_000)
 
@@ -56,6 +56,23 @@ export async function checkAndCreatePmWorkOrders(): Promise<{ created: number; o
 
   let created = 0
   let overdue = 0
+  let skipped = 0
+
+  // P3.2: Idempotency — skip if engine was already run for this schedule+period
+  const schedIds = schedulesSnap.docs.map((d) => d.id)
+  const idempotencyKey = schedIds.sort().join(',')
+  const dedupWindow = Timestamp.fromMillis(now - 5 * 60_000) // 5-minute dedup window
+  const recentRuns = await getDocs(
+    query(
+      collection(db, 'pmExecutionLog'),
+      where('idempotencyKey', '==', idempotencyKey),
+      where('runAt', '>=', dedupWindow),
+    ),
+  )
+  if (!recentRuns.empty) {
+    skipped = schedulesSnap.size
+    return { created: 0, overdue: 0, skipped }
+  }
 
   for (const schedDoc of schedulesSnap.docs) {
     const sched = { id: schedDoc.id, ...schedDoc.data() } as PMSchedule & { id: string }
@@ -138,16 +155,17 @@ export async function checkAndCreatePmWorkOrders(): Promise<{ created: number; o
     }
   }
 
-  // Log execution
+  // P3.2: Log execution with idempotency key
   await addDoc(collection(db, 'pmExecutionLog'), {
     runAt: Timestamp.now(),
     schedulesChecked: schedulesSnap.size,
     woCreated: created,
     overdueMarked: overdue,
-    details: [`Created ${created} WOs, ${overdue} overdue`],
+    details: [`Created ${created} WOs, ${overdue} overdue${skipped > 0 ? ` (${skipped} skipped — recent run)` : ''}`],
+    idempotencyKey,
   })
 
-  return { created, overdue }
+  return { created, overdue, skipped }
 }
 
 // ─── markOverduePmWorkOrders ──────────────────────────────────────────────

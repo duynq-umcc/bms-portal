@@ -9,7 +9,7 @@ import {
   listenUnreadExpiryAlertsCount,
   addImportDocAudit,
 } from '@/firebase/db'
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore'
+import { doc, setDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { db } from '@/firebase/config'
 import type { InventoryItem, InventoryTransaction, LegalDocs } from '@/firebase/types'
 import { TableSkeleton, EmptyState } from '@/components/ui/Table'
@@ -21,20 +21,21 @@ import { z } from 'zod'
 import {
   Warehouse, Search, Plus, ArrowDownToLine, ArrowUpFromLine,
   AlertTriangle, Package, ShoppingCart, Clock, FileText, ArrowLeft, ArrowRight,
+  Layers,
 } from 'lucide-react'
 import { format, differenceInDays } from 'date-fns'
 import {
   getBatchesFIFO,
   getBatchesFEFO,
   validateFIFOExport,
+  getExportBatchPreview,
   type BatchInfo,
   type FIFOWarning,
+  type ExportPreview,
 } from '@/utils/fifoEngine'
 import ExpiryAlertTab from './ExpiryAlertTab'
 import ImportDocPanel from './ImportDocPanel'
 import ImportDocViewer from './ImportDocViewer'
-import { Timestamp } from 'firebase/firestore'
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type WarehouseTab = 'inventory' | 'import' | 'export' | 'expiry'
@@ -369,18 +370,22 @@ function ExportModal({
   })
   const selectedCode = watch('itemCode')
   const selectedItem = items.find((i) => i.code === selectedCode)
+  const qty = Number(watch('quantity') ?? 0)
 
   const [batches, setBatches] = useState<BatchInfo[]>([])
   const [selectedBatch, setSelectedBatch] = useState('')
   const [fifoWarning, setFifoWarning] = useState<FIFOWarning | null>(null)
   const [method, setMethod] = useState<'fifo' | 'fefo'>('fifo')
   const [loadingBatches, setLoadingBatches] = useState(false)
+  const [preview, setPreview] = useState<ExportPreview | null>(null)
+  const [, setLoadingPreview] = useState(false)
 
   useEffect(() => {
     if (!selectedItem) return
     setLoadingBatches(true)
     setSelectedBatch('')
     setFifoWarning(null)
+    setPreview(null)
     setBatches([])
     const load = async () => {
       const b = method === 'fifo'
@@ -393,6 +398,23 @@ function ExportModal({
     load()
   }, [selectedItem?.id, method])
 
+  // Load batch preview when quantity changes
+  useEffect(() => {
+    if (!selectedItem || qty <= 0) {
+      setPreview(null)
+      return
+    }
+    let cancelled = false
+    setLoadingPreview(true)
+    getExportBatchPreview(selectedItem.id, qty, method, selectedBatch).then((p) => {
+      if (!cancelled) {
+        setPreview(p)
+        setLoadingPreview(false)
+      }
+    })
+    return () => { cancelled = true }
+  }, [selectedItem?.id, qty, method, selectedBatch])
+
   const handleBatchChange = async (batch: string) => {
     if (!selectedItem) return
     setSelectedBatch(batch)
@@ -402,14 +424,26 @@ function ExportModal({
 
   const selectedBatchData = batches.find((b) => b.batchNumber === selectedBatch)
 
+  // QW-7: over-quota warning — check against FIFO-first batch, not total stock
+  const currentBatchQty = selectedBatchData?.quantity ?? 0
+  const currentBatchIdx = batches.findIndex((b) => b.batchNumber === selectedBatch)
+  const nextBatch = batches[currentBatchIdx + 1]
+  const overQuota = selectedItem && qty > 0 && qty > currentBatchQty
+
   const onSubmit = async (data: F) => {
     if (!selectedItem) { toast.error('Không tìm thấy vật tư'); return }
     if (selectedBatch && selectedBatchData && selectedBatchData.daysRemaining <= 0) {
       toast.error('Không thể xuất kho vật tư đã hết hạn')
       return
     }
+    // Block if insufficient total stock (aggregate check)
     if (data.quantity > selectedItem.quantity) {
       toast.error(`Không đủ hàng! Hiện chỉ còn ${selectedItem.quantity} ${selectedItem.unit}`)
+      return
+    }
+    // Block if preview is invalid (batch-level validation via P1.6 fix)
+    if (preview && !preview.isValid) {
+      toast.error(preview.errorMessage || 'Số lượng vượt tồn kho')
       return
     }
     try {
@@ -601,6 +635,50 @@ function ExportModal({
             <label className="block text-sm font-medium text-gray-300 mb-1">Số lượng *</label>
             <input type="number" step="1" {...register('quantity')} className="input-field" />
             {errors.quantity && <p className="text-red-400 text-xs mt-1">{errors.quantity.message}</p>}
+            {overQuota && (
+              <p className="text-xs text-amber mt-1 flex items-start gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 flex-shrink-0" />
+                Lô hiện tại chỉ còn {currentBatchQty} — xuất thêm sẽ sang lô tiếp theo
+                {nextBatch?.expiryDate ? ` (HH: ${format(nextBatch.expiryDate.toDate(), 'dd/MM/yyyy')})` : ''}
+              </p>
+            )}
+
+            {/* P1.6: Batch preview — shows which batches will be touched */}
+            {preview && preview.lines.length > 1 && (
+              <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-3 mt-2">
+                <div className="flex items-center gap-2 mb-2">
+                  <Layers className="w-4 h-4 text-cyan-400" />
+                  <span className="text-xs font-medium text-cyan-400">
+                    Xuất từ {preview.lines.length} lô hàng:
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {preview.lines.map((line, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-gray-300">{line.batchNumber}</span>
+                        {line.expiryDate && (
+                          <span className="text-t3">HH: {format(line.expiryDate.toDate(), 'dd/MM/yyyy')}</span>
+                        )}
+                      </div>
+                      <span className="text-gray-100 font-medium">
+                        −{line.deductQty} VT
+                        {line.remainingAfter > 0 && (
+                          <span className="text-t3 font-normal ml-1">(còn {line.remainingAfter})</span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {preview && !preview.isValid && (
+              <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-3 flex items-start gap-2 mt-1">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <span className="text-xs text-red-400">{preview.errorMessage}</span>
+              </div>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">Đơn vị yêu cầu *</label>
@@ -616,7 +694,7 @@ function ExportModal({
           <label className="block text-sm font-medium text-gray-300 mb-1">Mục đích</label>
           <textarea {...register('purpose')} className="input-field" rows={2} placeholder="Mục đích sử dụng..." />
         </div>
-        <button type="submit" disabled={isSubmitting} className="btn-primary w-full flex items-center justify-center gap-2">
+        <button type="submit" disabled={isSubmitting || (preview !== null && !preview.isValid)} className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-40">
           <ArrowUpFromLine className="w-4 h-4" />
           {isSubmitting ? 'Đang xử lý...' : 'Xác nhận xuất kho'}
         </button>
@@ -649,7 +727,7 @@ function AddItemModal({
         minQuantity: data.minQuantity,
         lastImport: undefined,
         lastExport: undefined,
-        expiryDate: data.expiryDate ? { toDate: () => new Date(data.expiryDate as string) } as any : undefined,
+        expiryDate: data.expiryDate ? Timestamp.fromDate(new Date(data.expiryDate)) : undefined,
       })
       toast.success('Thêm vật tư thành công')
       onSuccess()
@@ -1008,10 +1086,10 @@ function ImportHistoryTab({
                       )}
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
-                      <span className="font-mono text-xs text-gray-400">{t.itemCode ?? (t as any).itemCode}</span>
+                      <span className="font-mono text-xs text-gray-400">{t.itemCode ?? '—'}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-200">{t.itemName ?? t.itemId ?? (t as any).itemName}</p>
+                      <p className="font-medium text-gray-200">{t.itemName ?? t.itemId}</p>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span className="font-semibold text-green-400">
@@ -1082,10 +1160,10 @@ function ExportHistoryTab({ transactions }: { transactions: InventoryTransaction
                       )}
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
-                      <span className="font-mono text-xs text-gray-400">{(t as any).itemCode}</span>
+                      <span className="font-mono text-xs text-gray-400">{t.itemCode ?? '—'}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-200">{(t as any).itemName ?? t.itemId}</p>
+                      <p className="font-medium text-gray-200">{t.itemName ?? t.itemId}</p>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span className="font-semibold text-red-400">
@@ -1148,10 +1226,6 @@ export default function WarehousePage() {
     setShowExport(true)
   }
 
-  const handleOrder = (code: string) => {
-    setPrefillCode(code)
-    setShowExport(true)
-  }
 
   if (error) {
     return (
@@ -1243,7 +1317,7 @@ export default function WarehousePage() {
       {/* Tab content */}
       {activeTab === 'inventory' && (
         <>
-          <InventoryTable items={items} onExport={handleExport} onOrder={handleOrder} />
+          <InventoryTable items={items} onExport={handleExport} onOrder={handleExport} />
           <button onClick={() => setShowAdd(true)} className="btn-secondary text-sm flex items-center gap-1.5">
             <Plus className="w-4 h-4" /> Thêm vật tư mới
           </button>

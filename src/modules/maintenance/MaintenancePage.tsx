@@ -548,6 +548,10 @@ export default function MaintenancePage() {
     if (statusFilter !== 'all' && wo.status !== statusFilter) return false
     if (priorityFilter !== 'all' && wo.priority !== priorityFilter) return false
     if (categoryFilter !== 'all' && wo.system?.toLowerCase() !== categoryFilter) return false
+    if (sourceFilter !== 'all') {
+      if (sourceFilter === 'incident' && !wo.sourceIncident) return false
+      if (sourceFilter === 'pm' && !wo.sourcePm) return false
+    }
     return true
   })
 
